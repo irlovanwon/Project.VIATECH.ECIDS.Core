@@ -1,0 +1,28 @@
+{
+    "version": 1,
+    "api3a": {
+        "host": "0.0.0.0",
+        "port": 9445,
+        "cert_path": "certs/server.crt",
+        "key_path": "certs/server.key",
+        "thread_strategy": "hybrid",
+        "worker_threads": 4
+    },
+    "api3b": {
+        "transport": "ipc",
+        "endpoints": {
+            "result": "ipc:///tmp/core_pub_result",
+            "status": "ipc:///tmp/core_pub_status",
+            "data": "ipc:///tmp/core_pub_data"
+        },
+        "sndhwm": 10
+    },
+    "api3c": {
+        "host": "127.0.0.1",
+        "port": 9446,
+        "cert_path": "certs/server.crt",
+        "key_path": "certs/server.key",
+        "thread_strategy": "one_loop_per_thread",
+        "worker_threads": 2
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "version": 1,
+    "api1a": {
+        "transport": "ipc",
+        "channels": {
+            "stereo_image": "ipc:///tmp/sc_pub_stereo_image",
+            "depth_map": "ipc:///tmp/sc_pub_depth_map",
+            "point_cloud": "ipc:///tmp/sc_pub_point_cloud",
+            "disparity_map": "ipc:///tmp/sc_pub_disparity_map",
+            "imu": "ipc:///tmp/sc_pub_imu",
+            "magnetometer": "ipc:///tmp/sc_pub_magnetometer",
+            "barometer": "ipc:///tmp/sc_pub_barometer"
+        },
+        "rcvhwm": 10
+    },
+    "api1b": {
+        "stereo_camera_host": "127.0.0.1",
+        "stereo_camera_port": 9443,
+        "cert_path": "",
+        "timeout_ms": 5000
+    }
+}

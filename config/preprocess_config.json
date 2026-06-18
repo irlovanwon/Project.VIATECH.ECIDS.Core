@@ -1,0 +1,6 @@
+{
+    "version": 1,
+    "enable_disk_storage": true,
+    "image_save_format": "jpg",
+    "image_quality": 95
+}

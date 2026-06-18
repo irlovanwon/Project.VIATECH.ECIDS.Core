@@ -1,0 +1,6 @@
+{
+    "version": 1,
+    "edge_fitting_method": "least_squares",
+    "disparity_method": "locally_weighted",
+    "min_confidence": 0.5
+}

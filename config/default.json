@@ -1,0 +1,109 @@
+{
+    "version": 1,
+    "module_id": "ECIDS-Core-01",
+
+    "api1a": {
+        "transport": "ipc",
+        "channels": {
+            "stereo_image": "ipc:///tmp/sc_pub_stereo_image",
+            "depth_map": "ipc:///tmp/sc_pub_depth_map",
+            "point_cloud": "ipc:///tmp/sc_pub_point_cloud",
+            "disparity_map": "ipc:///tmp/sc_pub_disparity_map",
+            "imu": "ipc:///tmp/sc_pub_imu",
+            "magnetometer": "ipc:///tmp/sc_pub_magnetometer",
+            "barometer": "ipc:///tmp/sc_pub_barometer"
+        },
+        "rcvhwm": 10
+    },
+
+    "api1b": {
+        "stereo_camera_host": "127.0.0.1",
+        "stereo_camera_port": 9443,
+        "cert_path": "",
+        "timeout_ms": 5000
+    },
+
+    "api2a": {
+        "transport": "ipc",
+        "endpoint_local": "ipc:///tmp/ai_vision_dealer_detection",
+        "endpoint_remote": "tcp://*:5555",
+        "identity": "ecids_core",
+        "sndhwm": 10,
+        "rcvhwm": 10,
+        "poll_timeout_ms": 100,
+        "ai_mode": "file"
+    },
+
+    "api2b": {
+        "ai_admin_host": "127.0.0.1",
+        "ai_admin_port": 8445,
+        "cert_path": "",
+        "timeout_ms": 5000
+    },
+
+    "api3a": {
+        "host": "0.0.0.0",
+        "port": 9445,
+        "cert_path": "certs/server.crt",
+        "key_path": "certs/server.key",
+        "thread_strategy": "hybrid",
+        "worker_threads": 4
+    },
+
+    "api3b": {
+        "transport": "ipc",
+        "endpoints": {
+            "result": "ipc:///tmp/core_pub_result",
+            "status": "ipc:///tmp/core_pub_status",
+            "data": "ipc:///tmp/core_pub_data"
+        },
+        "sndhwm": 10
+    },
+
+    "api3c": {
+        "host": "127.0.0.1",
+        "port": 9446,
+        "cert_path": "certs/server.crt",
+        "key_path": "certs/server.key",
+        "thread_strategy": "one_loop_per_thread",
+        "worker_threads": 2
+    },
+
+    "preprocess": {
+        "enable_disk_storage": true,
+        "image_save_format": "jpg",
+        "image_quality": 95
+    },
+
+    "postprocess": {
+        "edge_fitting_method": "least_squares",
+        "disparity_method": "locally_weighted",
+        "min_confidence": 0.5
+    },
+
+    "database": {
+        "root_path": "database",
+        "enable_housekeep": true,
+        "max_size_gb": 50,
+        "inspection_included_data": [
+            "stereo_images",
+            "pointcloud",
+            "depth_map",
+            "ai_results_original",
+            "results_processed"
+        ],
+        "ai_test_included_data": [
+            "stereo_images",
+            "ai_results_original",
+            "results_processed"
+        ]
+    },
+
+    "stereo_params": {
+        "baseline_mm": 120,
+        "focal_length_px": 0,
+        "calibration_file": ""
+    },
+
+    "log_level": "info"
+}

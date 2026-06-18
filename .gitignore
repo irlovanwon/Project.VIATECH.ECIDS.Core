@@ -1,0 +1,20 @@
+# Build
+build/
+log/
+logs/
+
+# Runtime
+status/
+certs/
+database/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

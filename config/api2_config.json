@@ -1,0 +1,19 @@
+{
+    "version": 1,
+    "api2a": {
+        "transport": "ipc",
+        "endpoint_local": "ipc:///tmp/ai_vision_dealer_detection",
+        "endpoint_remote": "tcp://*:5555",
+        "identity": "ecids_core",
+        "sndhwm": 10,
+        "rcvhwm": 10,
+        "poll_timeout_ms": 100,
+        "ai_mode": "file"
+    },
+    "api2b": {
+        "ai_admin_host": "127.0.0.1",
+        "ai_admin_port": 8445,
+        "cert_path": "",
+        "timeout_ms": 5000
+    }
+}
