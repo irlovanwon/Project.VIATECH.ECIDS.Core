@@ -28,6 +28,18 @@ pkg_check_modules(CURL IMPORTED_TARGET libcurl)
 # OpenSSL
 pkg_check_modules(OPENSSL IMPORTED_TARGET openssl)
 
+# OpenCV — find manually (pkg-config path is stale on this system)
+find_path(OPENCV_INCLUDE_DIR opencv2/opencv.hpp PATHS /usr/include/opencv4)
+set(OPENCV_LIBS "")
+find_library(_OCV_core NAMES opencv_core PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+find_library(_OCV_imgcodecs NAMES opencv_imgcodecs PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+find_library(_OCV_imgproc NAMES opencv_imgproc PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+if(OPENCV_INCLUDE_DIR AND _OCV_core)
+    set(OPENCV_FOUND TRUE)
+    set(OPENCV_LIBS ${_OCV_core} ${_OCV_imgcodecs} ${_OCV_imgproc})
+    message(STATUS "OpenCV found: include=${OPENCV_INCLUDE_DIR}")
+endif()
+
 # Google Test
 find_package(GTest QUIET)
 
@@ -53,6 +65,13 @@ if(nlohmann_json_FOUND)
     target_link_libraries(ecids_core_lib PUBLIC nlohmann_json::nlohmann_json)
 elseif(JSON_FOUND)
     target_link_libraries(ecids_core_lib PUBLIC PkgConfig::JSON)
+endif()
+
+if(OPENCV_FOUND)
+    target_include_directories(ecids_core_lib PUBLIC ${OPENCV_INCLUDE_DIR})
+    target_link_libraries(ecids_core_lib PUBLIC ${OPENCV_LIBS})
+else()
+    message(WARNING "OpenCV not found — postprocessing image features will be limited")
 endif()
 
 # --- Main Executable ---
