@@ -137,20 +137,21 @@ void DetectionDealer::send_binary_request(const std::string& transaction_id,
 
     json header;
     header["TransactionID"] = transaction_id;
-    header["Mode"] = "Stream";
+    header["Mode"] = "Binary";
     header["DealerID"] = identity_;
     header["Timestamp"] = Timestamp::now_string().substr(0, 15);
-    header["ImageCount"] = 2;
+    header["ImageCount"] = 1;
     header["Parts"] = json::array({
-        json{{"Index", 0}, {"Part", "left"}, {"Resolution", "1920,1080"}, {"Format", "Mono"}, {"Size", left_size}},
-        json{{"Index", 1}, {"Part", "right"}, {"Resolution", "1920,1080"}, {"Format", "Mono"}, {"Size", right_size}}
+        json{{"Index", 0}, {"Part", "left"}, {"Resolution", "1920,1080"}, {"Format", "Mono"}, {"Size", left_size}}
+    });
+    header["Data"] = json::array({
+        json{{"FileName", "L.jpg"}, {"Format", "Mono"}, {"Resolution", "1920,1080"}}
     });
 
     std::string hdr = header.dump();
 
     zmq_send_zero_copy(pub_sock_, hdr.c_str(), hdr.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
-    zmq_send_zero_copy(pub_sock_, left_data, left_size, ZMQ_SNDMORE | ZMQ_DONTWAIT);
-    zmq_send_zero_copy(pub_sock_, right_data, right_size, ZMQ_DONTWAIT);
+    zmq_send_zero_copy(pub_sock_, left_data, left_size, ZMQ_DONTWAIT);
 }
 
 void DetectionDealer::poll_loop_() {
