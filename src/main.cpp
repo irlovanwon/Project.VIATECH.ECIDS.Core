@@ -114,14 +114,14 @@ int main(int argc, char* argv[]) {
     subscriber.set_callback([&](const std::string& channel, const DataBundle& bundle) {
         buffer.put(channel, bundle);
 
-        if (channel == "stereo_image") {
+        if (channel == "stereo_image" || channel == "visual_geometric_2d") {
             buffer.put_stereo(bundle.header.pair_id, bundle.header.part, bundle);
             if (!g_processing_paused.load()) {
                 buffer.enqueue_inspection(bundle);
             }
         }
 
-        if (channel == "depth_map") {
+        if (channel == "depth_map" || channel == "visual_geometric_2d") {
             buffer.enqueue_depth(bundle);
         }
 

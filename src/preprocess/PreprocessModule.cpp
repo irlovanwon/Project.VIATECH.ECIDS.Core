@@ -238,7 +238,8 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
 
         {
             std::lock_guard<std::mutex> lock(pending_mutex_);
-            pending_[ts] = {ts, left, right, idx, sub_task_.load(), working_distance_mm};
+            if (pending_.size() > 200) pending_.clear();
+            pending_[ts] = {ts, DataBundle{}, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
         }
     } else if (ai_mode_ == AIMode::Binary && dealer_) {
         dealer_->send_binary_request(ts,
@@ -248,7 +249,8 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
 
         {
             std::lock_guard<std::mutex> lock(pending_mutex_);
-            pending_[ts] = {ts, left, right, idx, sub_task_.load(), working_distance_mm};
+            if (pending_.size() > 200) pending_.clear();
+            pending_[ts] = {ts, DataBundle{}, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
         }
     }
 }

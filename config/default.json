@@ -5,13 +5,9 @@
     "api1a": {
         "transport": "ipc",
         "channels": {
-            "stereo_image": "ipc:///tmp/sc_pub_stereo_image",
-            "depth_map": "ipc:///tmp/sc_pub_depth_map",
-            "point_cloud": "ipc:///tmp/sc_pub_point_cloud",
-            "disparity_map": "ipc:///tmp/sc_pub_disparity_map",
-            "imu": "ipc:///tmp/sc_pub_imu",
-            "magnetometer": "ipc:///tmp/sc_pub_magnetometer",
-            "barometer": "ipc:///tmp/sc_pub_barometer"
+            "visual_geometric_2d": "ipc:///tmp/sc_pub_2d",
+            "visual_geometric_3d": "ipc:///tmp/sc_pub_3d",
+            "sensor_tracking": "ipc:///tmp/sc_pub_sensor"
         },
         "rcvhwm": 10
     },
@@ -25,9 +21,9 @@
 
     "api2a": {
         "transport": "ipc",
-        "pub_endpoint_local": "ipc:///tmp/ai_vision_dealer_detection",
+        "pub_endpoint_local": "ipc:///tmp/core_detection_pub",
         "pub_endpoint_remote": "tcp://localhost:5555",
-        "sub_endpoint_local": "ipc:///tmp/ai_vision_dealer_result",
+        "sub_endpoint_local": "ipc:///tmp/core_detection_result",
         "sub_endpoint_remote": "tcp://localhost:5556",
         "identity": "ecids_core",
         "sndhwm": 10,
