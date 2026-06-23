@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: PostprocessModule implementation
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-06-23 Updated RecordManager API, added pair_index/sub_task/working_distance
  */
 
 #include "ecids_core/postprocess/PostprocessModule.h"
@@ -27,13 +27,17 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
                                             const std::string& escalator_id,
                                             const std::string& task_id,
                                             const uint8_t* left_data, size_t left_size,
-                                            const uint8_t* right_data, size_t right_size) {
+                                            const uint8_t* right_data, size_t right_size,
+                                            int pair_index,
+                                            InspectionSubTask sub_task,
+                                            double working_distance_mm) {
     InspectionResult result;
     result.transaction_id = response.transaction_id;
     result.station_id = station_id;
     result.escalator_id = escalator_id;
     result.task_id = task_id;
     result.timestamp = response.ts_received;
+    result.working_distance_mm = working_distance_mm;
 
     auto extracted = extractor_.extract(response.results, min_confidence_);
     if (!extracted.task_id.empty()) {
@@ -45,37 +49,44 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
     }
     result.abnormal = extracted.abnormals;
 
-    if (!extracted.up_cleats.empty() && !extracted.dn_cleats.empty()) {
-        EdgeFitter fitter;
-        Line2D up_edge = fitter.fit_up_edge(extracted.up_cleats);
-        Line2D dn_edge = fitter.fit_dn_edge(extracted.dn_cleats);
+    if (sub_task == InspectionSubTask::GapInspection) {
+        if (!extracted.up_cleats.empty() && !extracted.dn_cleats.empty()) {
+            EdgeFitter fitter;
+            Line2D up_edge = fitter.fit_up_edge(extracted.up_cleats);
+            Line2D dn_edge = fitter.fit_dn_edge(extracted.dn_cleats);
 
-        if (up_edge.valid && dn_edge.valid) {
-            GapLocalizer localizer;
-            auto gaps = localizer.locate_all_gaps(up_edge, dn_edge, extracted.gaps);
+            if (up_edge.valid && dn_edge.valid) {
+                GapLocalizer localizer;
+                auto gaps = localizer.locate_all_gaps(up_edge, dn_edge, extracted.gaps);
 
-            if (!gaps.empty() && left_data && right_data) {
-                double best_distance = 0.0;
-                for (const auto& gap : gaps) {
-                    double dist = gap_dist_.calculate(gap, left_data, left_size,
-                                                     right_data, right_size);
-                    if (dist > best_distance) best_distance = dist;
+                if (!gaps.empty() && left_data && right_data) {
+                    double best_distance = 0.0;
+                    for (const auto& gap : gaps) {
+                        double dist = gap_dist_.calculate(gap, left_data, left_size,
+                                                         right_data, right_size);
+                        if (dist > best_distance) best_distance = dist;
+                    }
+                    result.gap_distance_mm = best_distance;
+
+                    Logger::info("Postprocess: gap distance = "
+                                 + std::to_string(best_distance) + "mm (task " + result.task_id + ")");
                 }
-                result.gap_distance_mm = best_distance;
-
-                Logger::info("Postprocess: gap distance = "
-                             + std::to_string(best_distance) + "mm (task " + result.task_id + ")");
             }
         }
     }
 
     if (record_mgr_ && !record_mgr_->active_record().empty()) {
+        std::string subfolder = (sub_task == InspectionSubTask::Installation) ? "installation" : "inspection";
+
         json result_json;
         result_json["record_id"] = record_mgr_->active_record();
+        result_json["pair_index"] = pair_index;
+        result_json["camera_id"] = "L";
         result_json["timestamp"] = result.timestamp;
         result_json["task_id"] = result.task_id;
         result_json["station_id"] = result.station_id;
         result_json["escalator_id"] = result.escalator_id;
+        result_json["working_distance_mm"] = result.working_distance_mm;
         result_json["gap_distance_mm"] = result.gap_distance_mm;
 
         json dets = json::array();
@@ -91,31 +102,15 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
             result_json["abnormal"].push_back({{"label_id", a.label_id}, {"confidence", a.confidence}});
         }
 
-        record_mgr_->save_processed_result(record_mgr_->active_record(),
-                                           result.timestamp, result_json.dump());
-
-        json ai_json;
-        ai_json["TransactionID"] = response.transaction_id;
-        ai_json["DealerID"] = response.dealer_id;
-        ai_json["TimestampReceived"] = response.ts_received;
-        ai_json["TimestampReplied"] = response.ts_replied;
-        json ai_dets = json::array();
-        for (const auto& d : response.results) {
-            ai_dets.push_back({
-                {"LabelID", d.label_id},
-                {"Confidence", std::to_string(d.confidence)},
-                {"FileName", d.file_name}
-            });
-        }
-        ai_json["Result"] = ai_dets;
-        record_mgr_->save_ai_result(record_mgr_->active_record(),
-                                    result.timestamp, ai_json.dump());
+        record_mgr_->save_stereo_result(record_mgr_->active_record(),
+                                        subfolder, "L", pair_index, result_json.dump());
     }
 
     return result;
 }
 
-InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& response) {
+InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& response,
+                                                     int pair_index) {
     InspectionResult result;
     result.transaction_id = response.transaction_id;
     result.timestamp = response.ts_received;
@@ -126,6 +121,7 @@ InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& res
 
     if (record_mgr_ && !record_mgr_->active_record().empty()) {
         json result_json;
+        result_json["pair_index"] = pair_index;
         result_json["timestamp"] = result.timestamp;
 
         json dets = json::array();
@@ -137,8 +133,8 @@ InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& res
         }
         result_json["detections"] = dets;
 
-        record_mgr_->save_processed_result(record_mgr_->active_record(),
-                                           result.timestamp, result_json.dump());
+        record_mgr_->save_stereo_result(record_mgr_->active_record(),
+                                        "", "L", pair_index, result_json.dump());
     }
 
     return result;

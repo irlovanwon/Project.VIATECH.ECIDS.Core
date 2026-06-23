@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: API2a ZMQ DEALER/DEALER - AI detection
+ * Des: API2a ZMQ PUB/SUB - AI detection (PUB outbound + SUB inbound)
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented DEALER with File/Http/Binary modes
+ * Modification: 2026-06-23 Refactored DEALER→PUB (outbound) + SUB (inbound results)
  */
 
 #ifndef ECIDS_CORE_API2_DETECTIONDEALER_H
@@ -25,7 +25,8 @@ public:
     DetectionDealer();
     ~DetectionDealer();
 
-    void init(const std::string& endpoint, const std::string& identity,
+    void init(const std::string& pub_endpoint, const std::string& sub_endpoint,
+              const std::string& identity,
               int sndhwm = 10, int rcvhwm = 10, int poll_timeout_ms = 100);
 
     void start();
@@ -46,14 +47,16 @@ public:
 private:
     void poll_loop_();
 
-    std::string endpoint_;
+    std::string pub_endpoint_;
+    std::string sub_endpoint_;
     std::string identity_;
     int sndhwm_ = 10;
     int rcvhwm_ = 10;
     int poll_timeout_ms_ = 100;
 
     void* zmq_ctx_ = nullptr;
-    void* sock_ = nullptr;
+    void* pub_sock_ = nullptr;
+    void* sub_sock_ = nullptr;
     std::thread thread_;
     std::atomic<bool> running_{false};
     ResultCallback callback_;

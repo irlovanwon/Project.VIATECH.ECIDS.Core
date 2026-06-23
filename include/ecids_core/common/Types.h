@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Shared type definitions for internal data transfer
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented full type system for dataflow
+ * Modification: 2026-06-23 Removed Installation mode (now sub-task of Inspection), added Historical mode
  */
 
 #ifndef ECIDS_CORE_COMMON_TYPES_H
@@ -16,6 +16,7 @@
 #include <memory>
 #include <utility>
 #include <unordered_map>
+#include <atomic>
 
 namespace ecids_core {
 
@@ -26,7 +27,7 @@ enum class Mode {
     Data = 3,
     Calibration = 4,
     Uploading = 5,
-    Installation = 6,
+    Historical = 6,
     AITest = 7
 };
 
@@ -38,7 +39,7 @@ inline const char* mode_name(Mode m) {
         case Mode::Data:         return "data";
         case Mode::Calibration:  return "calibration";
         case Mode::Uploading:    return "uploading";
-        case Mode::Installation: return "installation";
+        case Mode::Historical:   return "historical";
         case Mode::AITest:       return "ai_test";
         default:                 return "unknown";
     }
@@ -50,7 +51,7 @@ inline Mode mode_from_string(const std::string& s) {
     if (s == "data")         return Mode::Data;
     if (s == "calibration")  return Mode::Calibration;
     if (s == "uploading")    return Mode::Uploading;
-    if (s == "installation") return Mode::Installation;
+    if (s == "historical")   return Mode::Historical;
     if (s == "ai_test")      return Mode::AITest;
     return Mode::None;
 }
@@ -74,6 +75,23 @@ inline AIMode ai_mode_from_string(const std::string& s) {
     if (s == "http")   return AIMode::Http;
     if (s == "binary") return AIMode::Binary;
     return AIMode::File;
+}
+
+enum class InspectionSubTask {
+    None = 0,
+    Installation = 1,
+    Marking = 2,
+    GapInspection = 3
+};
+
+inline const char* subtask_name(InspectionSubTask st) {
+    switch (st) {
+        case InspectionSubTask::None:           return "none";
+        case InspectionSubTask::Installation:   return "installation";
+        case InspectionSubTask::Marking:        return "marking";
+        case InspectionSubTask::GapInspection:  return "gap_inspection";
+        default:                                return "none";
+    }
 }
 
 struct FrameHeader {
@@ -121,10 +139,23 @@ struct InspectionResult {
     std::string station_id;
     std::string escalator_id;
     double gap_distance_mm = 0.0;
+    double working_distance_mm = 0.0;
     std::vector<Detection> ai_detections;
     std::vector<Detection> abnormal;
     std::string timestamp;
     std::vector<std::string> image_files;
+};
+
+struct DBWriteRequest {
+    enum class Type { Image, AIResult, StereoResult, PointCloud, DepthMap };
+    Type type;
+    std::string record_path;
+    std::string subfolder;
+    std::string camera_id;
+    int pair_index = 0;
+    std::vector<uint8_t> data;
+    std::string text_data;
+    std::string format = "jpg";
 };
 
 } // namespace ecids_core

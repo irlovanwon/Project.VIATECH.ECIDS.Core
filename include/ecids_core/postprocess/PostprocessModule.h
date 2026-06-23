@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Detection to gap measurement pipeline
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented full postprocessing pipeline
+ * Modification: 2026-06-23 Updated RecordManager API calls, added pair_index/sub_task params
  */
 
 #ifndef ECIDS_CORE_POSTPROCESS_POSTPROCESSMODULE_H
@@ -31,9 +31,13 @@ public:
                              const std::string& escalator_id,
                              const std::string& task_id,
                              const uint8_t* left_data, size_t left_size,
-                             const uint8_t* right_data, size_t right_size);
+                             const uint8_t* right_data, size_t right_size,
+                             int pair_index = 0,
+                             InspectionSubTask sub_task = InspectionSubTask::None,
+                             double working_distance_mm = 0.0);
 
-    InspectionResult process_ai_test(const DetectionResponse& response);
+    InspectionResult process_ai_test(const DetectionResponse& response,
+                                     int pair_index = 0);
 
 private:
     DetectionExtractor extractor_;

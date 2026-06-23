@@ -75,8 +75,8 @@ void DataPublisher::publish_json(const std::string& channel,
     header["ts_nsec"] = (Timestamp::now_unix_ms() % 1000) * 1000000;
     std::string hdr = header.dump();
 
-    zmq_send(it->second, hdr.c_str(), hdr.size(), ZMQ_SNDMORE);
-    zmq_send(it->second, payload_json.c_str(), payload_json.size(), 0);
+    zmq_send(it->second, hdr.c_str(), hdr.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
+    zmq_send(it->second, payload_json.c_str(), payload_json.size(), ZMQ_DONTWAIT);
 }
 
 void DataPublisher::publish_binary(const std::string& channel,
@@ -86,8 +86,8 @@ void DataPublisher::publish_binary(const std::string& channel,
     auto it = sockets_.find(channel);
     if (it == sockets_.end() || !it->second) return;
 
-    zmq_send(it->second, header_json.c_str(), header_json.size(), ZMQ_SNDMORE);
-    zmq_send(it->second, data, size, 0);
+    zmq_send(it->second, header_json.c_str(), header_json.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
+    zmq_send(it->second, data, size, ZMQ_DONTWAIT);
 }
 
 } // namespace ecids_core

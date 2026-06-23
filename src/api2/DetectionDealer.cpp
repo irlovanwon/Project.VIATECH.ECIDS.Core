@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: API2a DetectionDealer implementation
+ * Des: API2a DetectionDealer implementation (PUB/SUB)
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-06-23 Refactored DEALER→PUB+SUB, added zmq_msg_init_data zero-copy
  */
 
 #include "ecids_core/api2/DetectionDealer.h"
@@ -27,9 +27,11 @@ DetectionDealer::~DetectionDealer() {
     if (zmq_ctx_) zmq_ctx_destroy(zmq_ctx_);
 }
 
-void DetectionDealer::init(const std::string& endpoint, const std::string& identity,
+void DetectionDealer::init(const std::string& pub_endpoint, const std::string& sub_endpoint,
+                            const std::string& identity,
                             int sndhwm, int rcvhwm, int poll_timeout_ms) {
-    endpoint_ = endpoint;
+    pub_endpoint_ = pub_endpoint;
+    sub_endpoint_ = sub_endpoint;
     identity_ = identity;
     sndhwm_ = sndhwm;
     rcvhwm_ = rcvhwm;
@@ -39,44 +41,74 @@ void DetectionDealer::init(const std::string& endpoint, const std::string& ident
 void DetectionDealer::start() {
     if (running_) return;
 
-    sock_ = zmq_socket(zmq_ctx_, ZMQ_DEALER);
-    if (!sock_) {
-        Logger::error("DetectionDealer: zmq_socket failed");
+    pub_sock_ = zmq_socket(zmq_ctx_, ZMQ_PUB);
+    if (!pub_sock_) {
+        Logger::error("DetectionDealer: PUB socket creation failed");
+        return;
+    }
+    zmq_setsockopt(pub_sock_, ZMQ_SNDHWM, &sndhwm_, sizeof(sndhwm_));
+    int linger = 100;
+    zmq_setsockopt(pub_sock_, ZMQ_LINGER, &linger, sizeof(linger));
+
+    if (zmq_bind(pub_sock_, pub_endpoint_.c_str()) != 0) {
+        Logger::error("DetectionDealer: PUB bind " + pub_endpoint_ + " failed");
+        zmq_close(pub_sock_);
+        pub_sock_ = nullptr;
         return;
     }
 
-    zmq_setsockopt(sock_, ZMQ_IDENTITY, identity_.c_str(), identity_.size());
-    zmq_setsockopt(sock_, ZMQ_SNDHWM, &sndhwm_, sizeof(sndhwm_));
-    zmq_setsockopt(sock_, ZMQ_RCVHWM, &rcvhwm_, sizeof(rcvhwm_));
-    int linger = 100;
-    zmq_setsockopt(sock_, ZMQ_LINGER, &linger, sizeof(linger));
+    sub_sock_ = zmq_socket(zmq_ctx_, ZMQ_SUB);
+    if (!sub_sock_) {
+        Logger::error("DetectionDealer: SUB socket creation failed");
+        zmq_close(pub_sock_);
+        pub_sock_ = nullptr;
+        return;
+    }
+    zmq_setsockopt(sub_sock_, ZMQ_RCVHWM, &rcvhwm_, sizeof(rcvhwm_));
+    zmq_setsockopt(sub_sock_, ZMQ_LINGER, &linger, sizeof(linger));
+    zmq_setsockopt(sub_sock_, ZMQ_SUBSCRIBE, "", 0);
 
-    if (zmq_connect(sock_, endpoint_.c_str()) != 0) {
-        Logger::error("DetectionDealer: connect " + endpoint_ + " failed");
-        zmq_close(sock_);
-        sock_ = nullptr;
+    if (zmq_connect(sub_sock_, sub_endpoint_.c_str()) != 0) {
+        Logger::error("DetectionDealer: SUB connect " + sub_endpoint_ + " failed");
+        zmq_close(pub_sock_);
+        zmq_close(sub_sock_);
+        pub_sock_ = nullptr;
+        sub_sock_ = nullptr;
         return;
     }
 
     running_ = true;
     thread_ = std::thread(&DetectionDealer::poll_loop_, this);
-    Logger::info("DetectionDealer: connected to " + endpoint_);
+    Logger::info("DetectionDealer: PUB bind " + pub_endpoint_ + " SUB connect←" + sub_endpoint_);
 }
 
 void DetectionDealer::stop() {
     if (!running_) return;
     running_ = false;
     if (thread_.joinable()) thread_.join();
-    if (sock_) {
-        zmq_close(sock_);
-        sock_ = nullptr;
+    if (pub_sock_) {
+        zmq_close(pub_sock_);
+        pub_sock_ = nullptr;
+    }
+    if (sub_sock_) {
+        zmq_close(sub_sock_);
+        sub_sock_ = nullptr;
     }
     Logger::info("DetectionDealer: stopped");
+}
+
+static void zmq_send_zero_copy(void* sock, const void* data, size_t size, int flags) {
+    zmq_msg_t msg;
+    zmq_msg_init_size(&msg, size);
+    memcpy(zmq_msg_data(&msg), data, size);
+    zmq_msg_send(&msg, sock, flags);
 }
 
 void DetectionDealer::send_file_request(const std::string& transaction_id,
                                         const std::vector<std::string>& image_uris,
                                         const std::vector<std::string>& filenames) {
+    if (!pub_sock_) return;
+
     json req;
     req["TransactionID"] = transaction_id;
     req["Mode"] = "File";
@@ -95,12 +127,14 @@ void DetectionDealer::send_file_request(const std::string& transaction_id,
     req["Data"] = data_arr;
 
     std::string msg = req.dump();
-    zmq_send(sock_, msg.c_str(), msg.size(), 0);
+    zmq_send_zero_copy(pub_sock_, msg.c_str(), msg.size(), ZMQ_DONTWAIT);
 }
 
 void DetectionDealer::send_binary_request(const std::string& transaction_id,
                                           const uint8_t* left_data, size_t left_size,
                                           const uint8_t* right_data, size_t right_size) {
+    if (!pub_sock_) return;
+
     json header;
     header["TransactionID"] = transaction_id;
     header["Mode"] = "Stream";
@@ -114,15 +148,15 @@ void DetectionDealer::send_binary_request(const std::string& transaction_id,
 
     std::string hdr = header.dump();
 
-    zmq_send(sock_, hdr.c_str(), hdr.size(), ZMQ_SNDMORE);
-    zmq_send(sock_, left_data, left_size, ZMQ_SNDMORE);
-    zmq_send(sock_, right_data, right_size, 0);
+    zmq_send_zero_copy(pub_sock_, hdr.c_str(), hdr.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
+    zmq_send_zero_copy(pub_sock_, left_data, left_size, ZMQ_SNDMORE | ZMQ_DONTWAIT);
+    zmq_send_zero_copy(pub_sock_, right_data, right_size, ZMQ_DONTWAIT);
 }
 
 void DetectionDealer::poll_loop_() {
     while (running_) {
         zmq_pollitem_t item;
-        item.socket = sock_;
+        item.socket = sub_sock_;
         item.events = ZMQ_POLLIN;
 
         int rc = zmq_poll(&item, 1, poll_timeout_ms_);
@@ -136,7 +170,7 @@ void DetectionDealer::poll_loop_() {
         bool ok = true;
 
         while (true) {
-            if (zmq_msg_recv(&msg, sock_, 0) < 0) {
+            if (zmq_msg_recv(&msg, sub_sock_, 0) < 0) {
                 ok = false;
                 break;
             }
@@ -146,7 +180,7 @@ void DetectionDealer::poll_loop_() {
 
             int more;
             size_t more_size = sizeof(more);
-            zmq_getsockopt(sock_, ZMQ_RCVMORE, &more, &more_size);
+            zmq_getsockopt(sub_sock_, ZMQ_RCVMORE, &more, &more_size);
             if (!more) break;
         }
         zmq_msg_close(&msg);

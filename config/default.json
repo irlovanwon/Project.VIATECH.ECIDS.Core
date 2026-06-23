@@ -25,8 +25,10 @@
 
     "api2a": {
         "transport": "ipc",
-        "endpoint_local": "ipc:///tmp/ai_vision_dealer_detection",
-        "endpoint_remote": "tcp://*:5555",
+        "pub_endpoint_local": "ipc:///tmp/ai_vision_dealer_detection",
+        "pub_endpoint_remote": "tcp://localhost:5555",
+        "sub_endpoint_local": "ipc:///tmp/ai_vision_dealer_result",
+        "sub_endpoint_remote": "tcp://localhost:5556",
         "identity": "ecids_core",
         "sndhwm": 10,
         "rcvhwm": 10,
@@ -53,9 +55,9 @@
     "api3b": {
         "transport": "ipc",
         "endpoints": {
-            "result": "ipc:///tmp/core_pub_result",
-            "status": "ipc:///tmp/core_pub_status",
-            "data": "ipc:///tmp/core_pub_data"
+            "Visual2D": "ipc:///tmp/core_pub_visual2d",
+            "Visual3D": "ipc:///tmp/core_pub_visual3d",
+            "Sensor": "ipc:///tmp/core_pub_sensor"
         },
         "sndhwm": 10
     },
@@ -72,31 +74,23 @@
     "preprocess": {
         "enable_disk_storage": true,
         "image_save_format": "jpg",
-        "image_quality": 95
+        "image_quality": 95,
+        "spsc_capacity": 100,
+        "processing_paused": false
     },
 
     "postprocess": {
         "edge_fitting_method": "least_squares",
         "disparity_method": "locally_weighted",
-        "min_confidence": 0.5
+        "min_confidence": 0.5,
+        "spsc_capacity": 100
     },
 
     "database": {
         "root_path": "database",
         "enable_housekeep": true,
         "max_size_gb": 50,
-        "inspection_included_data": [
-            "stereo_images",
-            "pointcloud",
-            "depth_map",
-            "ai_results_original",
-            "results_processed"
-        ],
-        "ai_test_included_data": [
-            "stereo_images",
-            "ai_results_original",
-            "results_processed"
-        ]
+        "spsc_capacity": 200
     },
 
     "stereo_params": {

@@ -6,7 +6,7 @@ logs/
 # Runtime
 status/
 certs/
-database/
+/database/
 
 # IDE
 .vscode/

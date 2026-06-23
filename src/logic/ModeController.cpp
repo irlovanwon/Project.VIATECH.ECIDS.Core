@@ -39,11 +39,9 @@ ResponseCode ModeController::set_mode(Mode new_mode) {
         return ResponseCode::AlreadyInit;
     }
 
-    if (mode_ != Mode::None && mode_is_exclusive(mode_) && mode_is_exclusive(new_mode)) {
-        Logger::warn(std::string("ModeController: conflict — current=") + mode_name(mode_)
-                     + " requested=" + mode_name(new_mode));
-        return ResponseCode::ModeConflict;
-    }
+    // Allow free switching between exclusive modes.
+    // Mutual exclusion is inherent — only one mode stored in mode_.
+    // Task-active check is enforced by the API handler layer.
 
     Mode old = mode_;
     mode_ = new_mode;

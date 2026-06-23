@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: DataBuffer implementation
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-06-23 Drop-newest policy, added depth map queue
  */
 
 #include "ecids_core/data/DataBuffer.h"
@@ -60,8 +60,8 @@ bool DataBuffer::try_get_stereo_pair(uint64_t pair_id, DataBundle& left, DataBun
 
 void DataBuffer::enqueue_inspection(const DataBundle& bundle) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (inspection_queue_.size() >= 100) {
-        inspection_queue_.pop_front();
+    if (inspection_queue_.size() >= inspection_capacity_) {
+        return;
     }
     inspection_queue_.push_back(bundle);
     inspection_cv_.notify_one();
@@ -78,6 +78,20 @@ bool DataBuffer::dequeue_inspection(DataBundle& out, int timeout_ms) {
     }
     out = inspection_queue_.front();
     inspection_queue_.pop_front();
+    return true;
+}
+
+void DataBuffer::enqueue_depth(const DataBundle& bundle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    latest_depth_ = bundle;
+    has_depth_ = true;
+}
+
+bool DataBuffer::dequeue_depth(DataBundle& out, int timeout_ms) {
+    (void)timeout_ms;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!has_depth_) return false;
+    out = latest_depth_;
     return true;
 }
 

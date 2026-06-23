@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: ECIDS Core — entry point, wires all modules
  * Date: 2026-06-18
- * Modification: 2026-06-21 Full implementation with all API endpoints
+ * Modification: 2026-06-23 API2a PUB/SUB, removed StartInstallation, new RecordManager API, new PreprocessModule callback
  */
 
 #include "ecids_core/common/Logger.h"
@@ -37,6 +37,7 @@ using json = nlohmann::json;
 using namespace ecids_core;
 
 static std::atomic<bool> g_running{true};
+static std::atomic<bool> g_processing_paused{false};
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -82,6 +83,7 @@ int main(int argc, char* argv[]) {
             cfg.get_double("database.max_size_gb", 50));
 
     DataBuffer buffer;
+    buffer.set_inspection_capacity(cfg.get_int("preprocess.spsc_capacity", 100));
 
     StereoCameraClient sc_client;
     sc_client.init(cfg.get_string("api1b.stereo_camera_host", "127.0.0.1"),
@@ -93,19 +95,19 @@ int main(int argc, char* argv[]) {
                    cfg.get_int("api2b.ai_admin_port", 8445),
                    cfg.get_int("api2b.timeout_ms", 5000));
 
-    DataSubscriber subscriber;
-
+    json cfg_json;
     {
         std::ifstream cfg_file(config_path);
-        json cfg_json;
         try { cfg_file >> cfg_json; } catch (...) {
-            Logger::error("Failed to parse config JSON for channels");
+            Logger::error("Failed to parse config JSON");
             return 1;
         }
-        if (cfg_json.contains("api1a") && cfg_json["api1a"].contains("channels")) {
-            for (auto& [name, endpoint] : cfg_json["api1a"]["channels"].items()) {
-                subscriber.add_channel(name, endpoint.get<std::string>());
-            }
+    }
+
+    DataSubscriber subscriber;
+    if (cfg_json.contains("api1a") && cfg_json["api1a"].contains("channels")) {
+        for (auto& [name, endpoint] : cfg_json["api1a"]["channels"].items()) {
+            subscriber.add_channel(name, endpoint.get<std::string>());
         }
     }
 
@@ -114,6 +116,13 @@ int main(int argc, char* argv[]) {
 
         if (channel == "stereo_image") {
             buffer.put_stereo(bundle.header.pair_id, bundle.header.part, bundle);
+            if (!g_processing_paused.load()) {
+                buffer.enqueue_inspection(bundle);
+            }
+        }
+
+        if (channel == "depth_map") {
+            buffer.enqueue_depth(bundle);
         }
 
         Mode mode = ModeController::instance().active_mode();
@@ -122,23 +131,27 @@ int main(int argc, char* argv[]) {
             hdr["channel"] = channel;
             hdr["ts_sec"] = bundle.header.ts_sec;
             hdr["ts_nsec"] = bundle.header.ts_nsec;
-            static thread_local DataPublisher* pub = nullptr;
-            static thread_local WSSServer* wss = nullptr;
             (void)hdr;
         }
     });
     subscriber.start();
 
     DetectionDealer dealer;
-    std::string api2a_transport = cfg.get_string("api2a.transport", "ipc");
-    std::string dealer_endpoint = (api2a_transport == "tcp")
-        ? cfg.get_string("api2a.endpoint_remote", "tcp://localhost:5555")
-        : cfg.get_string("api2a.endpoint_local", "ipc:///tmp/ai_vision_dealer_detection");
-    dealer.init(dealer_endpoint,
-                cfg.get_string("api2a.identity", "ecids_core"),
-                cfg.get_int("api2a.sndhwm", 10),
-                cfg.get_int("api2a.rcvhwm", 10),
-                cfg.get_int("api2a.poll_timeout_ms", 100));
+    {
+        std::string api2a_transport = cfg.get_string("api2a.transport", "ipc");
+        std::string pub_endpoint = (api2a_transport == "tcp")
+            ? cfg.get_string("api2a.pub_endpoint_remote", "tcp://localhost:5555")
+            : cfg.get_string("api2a.pub_endpoint_local", "ipc:///tmp/ai_vision_dealer_detection");
+        std::string sub_endpoint = (api2a_transport == "tcp")
+            ? cfg.get_string("api2a.sub_endpoint_remote", "tcp://localhost:5556")
+            : cfg.get_string("api2a.sub_endpoint_local", "ipc:///tmp/ai_vision_dealer_result");
+
+        dealer.init(pub_endpoint, sub_endpoint,
+                    cfg.get_string("api2a.identity", "ecids_core"),
+                    cfg.get_int("api2a.sndhwm", 10),
+                    cfg.get_int("api2a.rcvhwm", 10),
+                    cfg.get_int("api2a.poll_timeout_ms", 100));
+    }
     dealer.start();
 
     AIMode ai_mode = ai_mode_from_string(cfg.get_string("api2a.ai_mode", "file"));
@@ -153,15 +166,10 @@ int main(int argc, char* argv[]) {
     preprocess.init(&buffer, &dealer, &db.records(), ai_mode);
 
     DataPublisher publisher;
-    {
-        std::ifstream cfg_file(config_path);
-        json cfg_json;
-        cfg_file >> cfg_json;
-        if (cfg_json.contains("api3b") && cfg_json["api3b"].contains("endpoints")) {
-            for (auto& [name, endpoint] : cfg_json["api3b"]["endpoints"].items()) {
-                publisher.add_channel(name, endpoint.get<std::string>(),
-                                      cfg_json["api3b"].value("sndhwm", 10));
-            }
+    if (cfg_json.contains("api3b") && cfg_json["api3b"].contains("endpoints")) {
+        for (auto& [name, endpoint] : cfg_json["api3b"]["endpoints"].items()) {
+            publisher.add_channel(name, endpoint.get<std::string>(),
+                                  cfg_json["api3b"].value("sndhwm", 10));
         }
     }
     publisher.start();
@@ -173,21 +181,25 @@ int main(int argc, char* argv[]) {
     preprocess.set_result_callback([&](const std::string& txn_id,
                                        const DetectionResponse& resp,
                                        const DataBundle& left,
-                                       const DataBundle& right) {
+                                       const DataBundle& right,
+                                       int pair_index,
+                                       InspectionSubTask sub_task,
+                                       double working_distance_mm) {
         (void)txn_id;
 
         Mode mode = ModeController::instance().active_mode();
         InspectionResult result;
 
         if (mode == Mode::AITest) {
-            result = postprocess.process_ai_test(resp);
+            result = postprocess.process_ai_test(resp, pair_index);
         } else {
             result = postprocess.process(resp,
                 task_mgr.inspection().station_id,
                 task_mgr.inspection().escalator_id,
                 task_mgr.inspection().task_id,
                 left.data->data(), left.data->size(),
-                right.data->data(), right.data->size());
+                right.data->data(), right.data->size(),
+                pair_index, sub_task, working_distance_mm);
         }
 
         json result_json;
@@ -196,7 +208,9 @@ int main(int argc, char* argv[]) {
         result_json["station_id"] = result.station_id;
         result_json["escalator_id"] = result.escalator_id;
         result_json["gap_distance_mm"] = result.gap_distance_mm;
+        result_json["working_distance_mm"] = result.working_distance_mm;
         result_json["timestamp"] = result.timestamp;
+        result_json["sub_task"] = subtask_name(sub_task);
 
         json dets = json::array();
         for (const auto& d : result.ai_detections) {
@@ -208,11 +222,12 @@ int main(int argc, char* argv[]) {
             result_json["abnormal"].push_back({{"label_id", a.label_id}, {"confidence", a.confidence}});
         }
 
-        publisher.publish_json("result", result_json.dump());
+        publisher.publish_json("Visual2D", result_json.dump());
         wss_server.broadcast_json("core/result", result_json.dump());
 
         Logger::info("Result published: txn=" + result.transaction_id
-                     + " gap=" + std::to_string(result.gap_distance_mm) + "mm");
+                     + " gap=" + std::to_string(result.gap_distance_mm) + "mm"
+                     + " wd=" + std::to_string(result.working_distance_mm) + "mm");
     });
 
     ClientServer client_server;
@@ -236,16 +251,16 @@ int main(int argc, char* argv[]) {
                     return make_response(4, "Invalid mode: " + mode_str);
                 }
 
+                if (StatusTracker::instance().task_active()) {
+                    return make_response(6, "ModeConflict: task active, stop first");
+                }
+
                 auto rc = ModeController::instance().set_mode(new_mode);
                 if (rc == ResponseCode::Success) {
                     json status_json;
                     status_json["active_mode"] = mode_str;
-                    publisher.publish_json("status", status_json.dump());
+                    publisher.publish_json("Visual2D", status_json.dump());
                     wss_server.broadcast_json("core/status", status_json.dump());
-
-                    if (new_mode == Mode::Data) {
-                        Logger::info("Data Mode: forwarding StereoCamera data to clients");
-                    }
 
                     return make_response(0, "Mode set to " + mode_str,
                                          R"({"mode":")" + mode_str + "\"}");
@@ -271,11 +286,21 @@ int main(int argc, char* argv[]) {
                 if (module == "core") {
                     if (req.contains("parameters") && req["parameters"].is_array()) {
                         for (const auto& p : req["parameters"]) {
-                            std::string name = p.value("name", "");
-                            std::string value = p.value("value", "");
+                            std::string name = p.value("key", p.value("name", ""));
+                            std::string value;
+                            if (p.contains("value")) {
+                                if (p["value"].is_string())
+                                    value = p["value"].get<std::string>();
+                                else
+                                    value = p["value"].dump();
+                            }
                             if (name == "ai_mode") {
                                 cfg.set_string("api2a.ai_mode", value);
                                 ai_mode = ai_mode_from_string(value);
+                            } else if (name == "processing_paused") {
+                                g_processing_paused.store(value == "true" || value == "1");
+                            } else if (!name.empty()) {
+                                cfg.set_string(name, value);
                             }
                         }
                     }
@@ -301,6 +326,7 @@ int main(int argc, char* argv[]) {
                     json data;
                     data["ai_mode"] = ai_mode_name(ai_mode);
                     data["active_mode"] = mode_name(ModeController::instance().active_mode());
+                    data["processing_paused"] = g_processing_paused.load();
                     return make_response(0, "Success", data.dump());
                 } else if (module == "stereo_camera") {
                     return sc_client.send_command("POST", "/GetParameter", body);
@@ -321,7 +347,10 @@ int main(int argc, char* argv[]) {
                 std::string escalator = req.value("escalator_id", "");
                 std::string task = req.value("task_id", "T1");
 
-                ModeController::instance().set_mode(Mode::Inspection);
+                auto rc = ModeController::instance().set_mode(Mode::Inspection);
+                if (rc != ResponseCode::Success && rc != ResponseCode::AlreadyInit) {
+                    return make_response(static_cast<int>(rc), response_code_name(rc));
+                }
                 task_mgr.start_inspection(station, escalator, task);
                 StatusTracker::instance().set_task_active(true);
 
@@ -343,26 +372,24 @@ int main(int argc, char* argv[]) {
             task_mgr.stop();
             StatusTracker::instance().set_task_active(false);
             db.records().set_active_record("");
+            ModeController::instance().set_mode(Mode::None);
             return make_response(0, "Inspection stopped");
         }
 
-        if (method == "POST" && path == "/StartInstallation") {
+        if (method == "POST" && path == "/SetSubTask") {
             try {
                 json req = json::parse(body);
-                std::string station = req.value("station_id", "");
-                std::string escalator = req.value("escalator_id", "");
-
-                ModeController::instance().set_mode(Mode::Installation);
-                task_mgr.start_installation(station, escalator);
-
-                std::string record_path = db.records().create_inspection_record(
-                    station, escalator, "T1");
-                db.records().set_active_record(record_path);
-
-                preprocess.start_inspection(record_path);
-
-                return make_response(0, "Installation started",
-                                     R"({"record_path":")" + record_path + "\"}");
+                std::string st = req.value("sub_task", "");
+                if (st == "installation") {
+                    preprocess.set_sub_task(InspectionSubTask::Installation);
+                } else if (st == "marking") {
+                    preprocess.set_sub_task(InspectionSubTask::Marking);
+                } else if (st == "gap_inspection") {
+                    preprocess.set_sub_task(InspectionSubTask::GapInspection);
+                } else {
+                    return make_response(4, "Invalid sub_task: " + st);
+                }
+                return make_response(0, "Sub-task set to " + st);
             } catch (const std::exception& e) {
                 return make_response(1, e.what());
             }
@@ -373,7 +400,10 @@ int main(int argc, char* argv[]) {
                 json req = json::parse(body);
                 std::string test_data = req.value("test_data_path", "");
 
-                ModeController::instance().set_mode(Mode::AITest);
+                auto rc2 = ModeController::instance().set_mode(Mode::AITest);
+                if (rc2 != ResponseCode::Success && rc2 != ResponseCode::AlreadyInit) {
+                    return make_response(static_cast<int>(rc2), response_code_name(rc2));
+                }
                 task_mgr.start_ai_test(test_data);
                 StatusTracker::instance().set_task_active(true);
 

@@ -2,16 +2,19 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: ImagePackager implementation
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-06-23 Removed RecordManager dependency, direct file write
  */
 
 #include "ecids_core/preprocess/ImagePackager.h"
-#include "ecids_core/database/RecordManager.h"
 #include "ecids_core/common/Logger.h"
 
 #include <opencv2/imgcodecs.hpp>
+#include <filesystem>
+#include <fstream>
 
 namespace ecids_core {
+
+namespace fs = std::filesystem;
 
 void ImagePackager::init(AIMode mode, const std::string& record_path,
                          const std::string& image_format, int quality) {
@@ -59,9 +62,14 @@ PackageResult ImagePackager::package(const std::string& timestamp,
             encoded = raw_vec;
         }
 
-        std::string filename = RecordManager().save_image(
-            record_path_, timestamp, part, encoded.data(), encoded.size(), image_format_);
-        return record_path_ + "/images/" + filename;
+        std::string img_dir = record_path_ + "/images";
+        fs::create_directories(img_dir);
+        std::string filename = timestamp + "-" + part + "." + image_format_;
+        std::string filepath = img_dir + "/" + filename;
+        std::ofstream ofs(filepath, std::ios::binary);
+        ofs.write(reinterpret_cast<const char*>(encoded.data()),
+                  static_cast<std::streamsize>(encoded.size()));
+        return filepath;
     };
 
     std::string left_path = save_image(left_data, left_size, "L");

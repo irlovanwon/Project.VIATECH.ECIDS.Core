@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Internal ring buffer (shared_ptr) — thread-safe per-channel data store
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented thread-safe per-channel latest+ring buffer
+ * Modification: 2026-06-23 Changed inspection queue to drop-newest policy
  */
 
 #ifndef ECIDS_CORE_DATA_DATABUFFER_H
@@ -23,6 +23,8 @@ namespace ecids_core {
 
 class DataBuffer {
 public:
+    void set_inspection_capacity(size_t cap) { inspection_capacity_ = cap; }
+
     void put(const std::string& channel, const DataBundle& bundle);
 
     bool get_latest(const std::string& channel, DataBundle& out) const;
@@ -35,6 +37,9 @@ public:
 
     void enqueue_inspection(const DataBundle& bundle);
     bool dequeue_inspection(DataBundle& out, int timeout_ms = 0);
+
+    void enqueue_depth(const DataBundle& bundle);
+    bool dequeue_depth(DataBundle& out, int timeout_ms = 0);
 
     std::vector<std::string> channel_names() const;
     void clear();
@@ -60,7 +65,11 @@ private:
     std::unordered_map<uint64_t, StereoPair> stereo_pairs_;
 
     std::deque<DataBundle> inspection_queue_;
+    size_t inspection_capacity_ = 100;
     std::condition_variable inspection_cv_;
+
+    DataBundle latest_depth_;
+    bool has_depth_ = false;
 };
 
 } // namespace ecids_core

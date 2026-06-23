@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Image to AI pipeline orchestration
  * Date: 2026-06-18
- * Modification: 2026-06-21 Redesigned for full pipeline with background processing
+ * Modification: 2026-06-23 Inspection sub-tasks, working distance, new filename convention
  */
 
 #ifndef ECIDS_CORE_PREPROCESS_PREPROCESSMODULE_H
@@ -32,12 +32,18 @@ public:
         std::string transaction_id;
         DataBundle left;
         DataBundle right;
+        int pair_index = 0;
+        InspectionSubTask sub_task = InspectionSubTask::None;
+        double working_distance_mm = 0.0;
     };
 
     using ResultCallback = std::function<void(const std::string& transaction_id,
                                               const DetectionResponse& response,
                                               const DataBundle& left,
-                                              const DataBundle& right)>;
+                                              const DataBundle& right,
+                                              int pair_index,
+                                              InspectionSubTask sub_task,
+                                              double working_distance_mm)>;
 
     PreprocessModule();
     ~PreprocessModule();
@@ -49,6 +55,9 @@ public:
     void start_inspection(const std::string& record_path);
     void stop_inspection();
 
+    void set_sub_task(InspectionSubTask st);
+    InspectionSubTask sub_task() const { return sub_task_; }
+
     void start_ai_test(const std::string& test_data_path);
     void stop_ai_test();
 
@@ -57,9 +66,11 @@ public:
 private:
     void inspection_loop_();
     void ai_test_loop_();
-    void process_pair_(const DataBundle& left, const DataBundle& right);
+    void process_pair_(const DataBundle& left, const DataBundle& right, double working_distance_mm = 0.0);
     void process_file_(const std::string& filepath);
     void on_ai_result_(const DetectionResponse& response);
+
+    std::string current_subfolder_() const;
 
     DataBuffer* buffer_ = nullptr;
     DetectionDealer* dealer_ = nullptr;
@@ -72,6 +83,9 @@ private:
     std::atomic<bool> ai_test_mode_{false};
     std::string active_record_path_;
     std::string test_data_path_;
+
+    std::atomic<InspectionSubTask> sub_task_{InspectionSubTask::None};
+    std::atomic<int> pair_index_{0};
 
     std::mutex pending_mutex_;
     std::unordered_map<std::string, PendingRequest> pending_;
