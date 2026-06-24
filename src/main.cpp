@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: ECIDS Core — entry point, wires all modules
  * Date: 2026-06-18
- * Modification: 2026-06-23 API2a PUB/SUB, removed StartInstallation, new RecordManager API, new PreprocessModule callback
+ * Modification: 2026-06-24 Added live image forwarding, detection annotation, station_id validation, installation status
  */
 
 #include "ecids_core/common/Logger.h"
@@ -25,6 +25,8 @@
 #include "ecids_core/postprocess/PostprocessModule.h"
 
 #include <nlohmann/json.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <csignal>
 #include <cstdlib>
@@ -32,6 +34,12 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <filesystem>
+#include <sstream>
+#include <iomanip>
+#include <algorithm>
+
+namespace fs = std::filesystem;
 
 using json = nlohmann::json;
 using namespace ecids_core;
@@ -52,6 +60,173 @@ static std::string make_response(int code, const std::string& message,
     j["data"] = json::parse(data_json, nullptr, false);
     if (j["data"].is_discarded()) j["data"] = data_json;
     return j.dump();
+}
+
+static json scan_inspection_records(const std::string& db_root) {
+    json records = json::array();
+    if (!fs::exists(db_root)) return records;
+
+    std::vector<fs::path> record_dirs;
+    try {
+        for (auto& yr : fs::directory_iterator(db_root)) {
+            if (!yr.is_directory()) continue;
+            for (auto& mo : fs::directory_iterator(yr.path())) {
+                if (!mo.is_directory()) continue;
+                for (auto& dy : fs::directory_iterator(mo.path())) {
+                    if (!dy.is_directory()) continue;
+                    for (auto& rec : fs::directory_iterator(dy.path())) {
+                        if (!rec.is_directory()) continue;
+                        std::string name = rec.path().filename().string();
+                        if (name.rfind("(Inspection)", 0) != 0) continue;
+                        record_dirs.push_back(rec.path());
+                    }
+                }
+            }
+        }
+    } catch (...) {}
+
+    for (const auto& rdir : record_dirs) {
+        std::string dirname = rdir.filename().string();
+        std::string after = dirname.substr(std::string("(Inspection)").size());
+
+        std::vector<std::string> toks;
+        {
+            size_t start = 0;
+            for (size_t i = 0; i <= after.size(); ++i) {
+                if (i == after.size() || after[i] == '-') {
+                    toks.push_back(after.substr(start, i - start));
+                    start = i + 1;
+                }
+            }
+        }
+
+        std::string date_str, time_str, station, escalator, task;
+        if (toks.size() >= 3) {
+            date_str = toks[0] + "-" + toks[1] + "-" + toks[2];
+        }
+        if (toks.size() >= 6) {
+            time_str = toks[3] + ":" + toks[4] + ":" + toks[5];
+        }
+        if (toks.size() >= 7) station = toks[6];
+        if (toks.size() >= 8) escalator = toks[7];
+        if (toks.size() >= 9) task = toks[8];
+
+        json rec;
+        rec["id"] = dirname;
+        std::string rel = rdir.string();
+        if (rel.rfind(db_root, 0) == 0) rel = rel.substr(db_root.size());
+        while (!rel.empty() && rel[0] == '/') rel = rel.substr(1);
+        rec["path"] = rel;
+        rec["inspectionDate"] = date_str + (time_str.empty() ? "" : " " + time_str);
+        rec["stationId"] = station;
+        rec["escalatorId"] = escalator;
+        rec["taskId"] = task;
+
+        std::string insp_dir = rdir.string() + "/inspection";
+        double gap_sum = 0;
+        int gap_count = 0, gaps_over5 = 0, defects = 0, step_count = 0;
+
+        if (fs::exists(insp_dir)) {
+            std::vector<fs::path> jfiles;
+            for (auto& f : fs::directory_iterator(insp_dir)) {
+                if (f.is_regular_file() && f.path().extension() == ".json") {
+                    std::string fn = f.path().filename().string();
+                    if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
+                }
+            }
+            step_count = static_cast<int>(jfiles.size());
+            for (const auto& jf : jfiles) {
+                try {
+                    std::ifstream ifs(jf);
+                    json data;
+                    ifs >> data;
+                    double gap = data.value("gap_distance_mm", 0.0);
+                    if (gap > 0) {
+                        gap_sum += gap;
+                        ++gap_count;
+                        if (gap > 5.0) ++gaps_over5;
+                    }
+                    if (data.contains("ai_detections") && data["ai_detections"].is_array()) {
+                        for (const auto& d : data["ai_detections"]) {
+                            if (d.value("confidence", 0.0) >= 0.5) ++defects;
+                        }
+                    }
+                } catch (...) {}
+            }
+        }
+
+        rec["stepCount"] = step_count;
+        rec["aveGapDistance"] = gap_count > 0
+            ? std::round((gap_sum / gap_count) * 10.0) / 10.0 : 0.0;
+        rec["gapsOver5"] = gaps_over5;
+        rec["defects"] = defects;
+        records.push_back(rec);
+    }
+
+    std::sort(records.begin(), records.end(), [](const json& a, const json& b) {
+        return a.value("inspectionDate", "") > b.value("inspectionDate", "");
+    });
+    return records;
+}
+
+static json read_record_details(const std::string& db_root,
+                                const std::string& record_path) {
+    json result;
+    std::string full = db_root;
+    if (!record_path.empty() && record_path[0] != '/') full += "/";
+    full += record_path;
+
+    if (!fs::exists(full)) {
+        result["error"] = "Record not found";
+        return result;
+    }
+
+    json steps = json::array();
+    std::string insp_dir = full + "/inspection";
+
+    if (fs::exists(insp_dir)) {
+        std::vector<fs::path> jfiles;
+        for (auto& f : fs::directory_iterator(insp_dir)) {
+            if (f.is_regular_file() && f.path().extension() == ".json") {
+                std::string fn = f.path().filename().string();
+                if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
+            }
+        }
+        std::sort(jfiles.begin(), jfiles.end());
+
+        for (const auto& jf : jfiles) {
+            try {
+                std::ifstream ifs(jf);
+                json data;
+                ifs >> data;
+
+                json step;
+                step["pairIndex"] = data.value("pair_index", 0);
+                step["timestamp"] = data.value("timestamp", "");
+                step["gapDistance"] = std::round(
+                    data.value("gap_distance_mm", 0.0) * 10.0) / 10.0;
+                step["workingDistance"] = std::round(
+                    data.value("working_distance_mm", 0.0) * 10.0) / 10.0;
+
+                std::string det = "Normal";
+                if (data.contains("ai_detections") && data["ai_detections"].is_array()) {
+                    for (const auto& d : data["ai_detections"]) {
+                        if (d.value("confidence", 0.0) >= 0.5) {
+                            det = (d.value("label_id", 0) == 1) ? "Warning" : "Defect";
+                            break;
+                        }
+                    }
+                }
+                step["aiDetection"] = det;
+                step["isFirstStep"] = (data.value("pair_index", -1) == 0);
+                steps.push_back(step);
+            } catch (...) {}
+        }
+    }
+
+    result["steps"] = steps;
+    result["stepCount"] = steps.size();
+    return result;
 }
 
 int main(int argc, char* argv[]) {
@@ -104,6 +279,17 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    DataPublisher publisher;
+    if (cfg_json.contains("api3b") && cfg_json["api3b"].contains("endpoints")) {
+        for (auto& [name, endpoint] : cfg_json["api3b"]["endpoints"].items()) {
+            publisher.add_channel(name, endpoint.get<std::string>(),
+                                  cfg_json["api3b"].value("sndhwm", 10));
+        }
+    }
+    publisher.start();
+
+    WSSServer wss_server;
+
     DataSubscriber subscriber;
     if (cfg_json.contains("api1a") && cfg_json["api1a"].contains("channels")) {
         for (auto& [name, endpoint] : cfg_json["api1a"]["channels"].items()) {
@@ -118,6 +304,29 @@ int main(int argc, char* argv[]) {
             buffer.put_stereo(bundle.header.pair_id, bundle.header.part, bundle);
             if (!g_processing_paused.load()) {
                 buffer.enqueue_inspection(bundle);
+            }
+
+            if (bundle.header.part.empty() || bundle.header.part == "left") {
+                static auto last_live_ts = std::chrono::steady_clock::now();
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - last_live_ts).count() >= 200) {
+                    last_live_ts = now;
+                    const auto& raw = *bundle.data;
+                    if (!raw.empty() && raw.size() % 4 == 0) {
+                        int w = 1920;
+                        int h = static_cast<int>(raw.size() / (1920u * 4));
+                        if (h > 0 && static_cast<size_t>(w) * h * 4 == raw.size()) {
+                            cv::Mat img(h, w, CV_8UC4, const_cast<uint8_t*>(raw.data()));
+                            std::vector<uint8_t> jpeg;
+                            cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 70});
+                            if (!jpeg.empty()) {
+                                wss_server.broadcast_binary("core/live_image",
+                                    jpeg.data(), jpeg.size());
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -165,17 +374,6 @@ int main(int argc, char* argv[]) {
     PreprocessModule preprocess;
     preprocess.init(&buffer, &dealer, &db.records(), ai_mode);
 
-    DataPublisher publisher;
-    if (cfg_json.contains("api3b") && cfg_json["api3b"].contains("endpoints")) {
-        for (auto& [name, endpoint] : cfg_json["api3b"]["endpoints"].items()) {
-            publisher.add_channel(name, endpoint.get<std::string>(),
-                                  cfg_json["api3b"].value("sndhwm", 10));
-        }
-    }
-    publisher.start();
-
-    WSSServer wss_server;
-
     TaskManager task_mgr;
 
     preprocess.set_result_callback([&](const std::string& txn_id,
@@ -214,7 +412,15 @@ int main(int argc, char* argv[]) {
 
         json dets = json::array();
         for (const auto& d : result.ai_detections) {
-            dets.push_back({{"label_id", d.label_id}, {"confidence", d.confidence}});
+            json det = {{"label_id", d.label_id}, {"confidence", d.confidence}};
+            if (!d.coordinates.empty()) {
+                json coords = json::array();
+                for (const auto& c : d.coordinates) {
+                    coords.push_back({c.first, c.second});
+                }
+                det["coordinates"] = coords;
+            }
+            dets.push_back(det);
         }
         result_json["ai_detections"] = dets;
         result_json["abnormal"] = json::array();
@@ -222,8 +428,61 @@ int main(int argc, char* argv[]) {
             result_json["abnormal"].push_back({{"label_id", a.label_id}, {"confidence", a.confidence}});
         }
 
+        if (sub_task == InspectionSubTask::Installation) {
+            bool wd_ok = (result.working_distance_mm >= 300.0 &&
+                          result.working_distance_mm <= 1000.0);
+            bool task_ok = !result.task_id.empty();
+            result_json["installation_ready"] = (wd_ok && task_ok);
+            result_json["working_distance_ok"] = wd_ok;
+            result_json["task_detected"] = task_ok;
+        }
+
         publisher.publish_json("Visual2D", result_json.dump());
         wss_server.broadcast_json("core/result", result_json.dump());
+
+        if (!left.data->empty()) {
+            cv::Mat img = cv::imdecode(*left.data, cv::IMREAD_COLOR);
+            if (!img.empty()) {
+                for (const auto& d : result.ai_detections) {
+                    if (d.coordinates.size() >= 2) {
+                        auto& p1 = d.coordinates[0];
+                        auto& p2 = d.coordinates[1];
+                        cv::rectangle(img,
+                            cv::Point(static_cast<int>(p1.first), static_cast<int>(p1.second)),
+                            cv::Point(static_cast<int>(p2.first), static_cast<int>(p2.second)),
+                            cv::Scalar(0, 255, 0), 2);
+                        std::string label = d.label_id + " " +
+                            std::to_string(d.confidence).substr(0, 4);
+                        int baseline = 0;
+                        auto ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.6, 2, &baseline);
+                        int y_pos = std::max(0, static_cast<int>(p1.second) - 5);
+                        cv::putText(img, label, cv::Point(static_cast<int>(p1.first), y_pos),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+                    }
+                }
+
+                std::string wd_text = "WD: " +
+                    std::to_string(result.working_distance_mm).substr(0, 6) + "mm";
+                cv::putText(img, wd_text, cv::Point(10, 30),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2);
+
+                if (sub_task == InspectionSubTask::Installation) {
+                    bool wd_ok = (result.working_distance_mm >= 300.0 &&
+                                  result.working_distance_mm <= 1000.0);
+                    std::string status = wd_ok ? "WD OK" : "WD OUT OF RANGE";
+                    cv::Scalar color = wd_ok ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+                    cv::putText(img, status, cv::Point(10, 60),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.7, color, 2);
+                }
+
+                std::vector<uint8_t> annotated;
+                cv::imencode(".jpg", img, annotated, {cv::IMWRITE_JPEG_QUALITY, 80});
+                if (!annotated.empty()) {
+                    wss_server.broadcast_binary("core/result_image",
+                        annotated.data(), annotated.size(), result_json.dump());
+                }
+            }
+        }
 
         Logger::info("Result published: txn=" + result.transaction_id
                      + " gap=" + std::to_string(result.gap_distance_mm) + "mm"
@@ -239,6 +498,25 @@ int main(int argc, char* argv[]) {
         if (method == "GET" && path == "/CheckStatus") {
             std::string status = StatusTracker::instance().to_json();
             return make_response(0, "Status", status);
+        }
+
+        if (method == "GET" && path == "/GetHistory") {
+            json records = scan_inspection_records(db.root_path());
+            json data;
+            data["records"] = records;
+            data["count"] = records.size();
+            return make_response(0, "Success", data.dump());
+        }
+
+        if (method == "POST" && path == "/GetRecord") {
+            try {
+                json req = json::parse(body);
+                std::string rec_path = req.value("record_path", "");
+                json details = read_record_details(db.root_path(), rec_path);
+                return make_response(0, "Success", details.dump());
+            } catch (const std::exception& e) {
+                return make_response(1, e.what());
+            }
         }
 
         if (method == "POST" && path == "/SetMode") {
@@ -346,6 +624,10 @@ int main(int argc, char* argv[]) {
                 std::string station = req.value("station_id", "");
                 std::string escalator = req.value("escalator_id", "");
                 std::string task = req.value("task_id", "T1");
+
+                if (station.empty() || escalator.empty()) {
+                    return make_response(4, "station_id and escalator_id are required");
+                }
 
                 auto rc = ModeController::instance().set_mode(Mode::Inspection);
                 if (rc != ResponseCode::Success && rc != ResponseCode::AlreadyInit) {

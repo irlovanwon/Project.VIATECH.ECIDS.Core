@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: PreprocessModule implementation
  * Date: 2026-06-18
- * Modification: 2026-06-23 Inspection sub-tasks, working distance, new filename convention
+ * Modification: 2026-06-24 Added FPS throttling for installation phase (2 FPS)
  */
 
 #include "ecids_core/preprocess/PreprocessModule.h"
@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <fstream>
 #include <unistd.h>
+#include <chrono>
 
 namespace ecids_core {
 
@@ -133,6 +134,8 @@ static double calculate_working_distance(const uint8_t* depth_data, size_t depth
 }
 
 void PreprocessModule::inspection_loop_() {
+    auto last_ai_send = std::chrono::steady_clock::now();
+
     while (running_) {
         DataBundle frame;
 
@@ -145,6 +148,17 @@ void PreprocessModule::inspection_loop_() {
         DataBundle right;
 
         auto sub = sub_task_.load();
+
+        if (sub == InspectionSubTask::Installation) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_ai_send).count();
+            if (elapsed_ms < 500) {
+                continue;
+            }
+            last_ai_send = now;
+        }
+
         double working_dist = 0.0;
 
         if (sub == InspectionSubTask::Installation) {
