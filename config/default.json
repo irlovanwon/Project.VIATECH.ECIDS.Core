@@ -29,7 +29,7 @@
         "sndhwm": 10,
         "rcvhwm": 10,
         "poll_timeout_ms": 100,
-        "ai_mode": "file"
+        "ai_mode": "binary"
     },
 
     "api2b": {
@@ -72,7 +72,8 @@
         "image_save_format": "jpg",
         "image_quality": 95,
         "spsc_capacity": 100,
-        "processing_paused": false
+        "processing_paused": false,
+        "installation_fps": 1
     },
 
     "postprocess": {

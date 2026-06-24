@@ -377,6 +377,9 @@ int main(int argc, char* argv[]) {
 
     TaskManager task_mgr;
 
+    static double installation_wd_sum = 0.0;
+    static int installation_wd_count = 0;
+
     preprocess.set_result_callback([&](const std::string& txn_id,
                                        const DetectionResponse& resp,
                                        const DataBundle& left,
@@ -430,60 +433,48 @@ int main(int argc, char* argv[]) {
         }
 
         if (sub_task == InspectionSubTask::Installation) {
-            bool wd_ok = (result.working_distance_mm >= 300.0 &&
-                          result.working_distance_mm <= 1000.0);
+            if (result.working_distance_mm > 0) {
+                installation_wd_sum += result.working_distance_mm;
+                installation_wd_count++;
+            }
+            double avg_wd = (installation_wd_count > 0)
+                            ? installation_wd_sum / installation_wd_count
+                            : result.working_distance_mm;
+            result_json["avg_working_distance_mm"] = std::round(avg_wd * 10.0) / 10.0;
+
+            bool wd_ok = (avg_wd >= 300.0 && avg_wd <= 1000.0);
             bool task_ok = !result.task_id.empty();
             result_json["installation_ready"] = (wd_ok && task_ok);
             result_json["working_distance_ok"] = wd_ok;
             result_json["task_detected"] = task_ok;
         }
 
+        if (result.up_edge.valid) {
+            result_json["up_edge"] = {
+                {"slope", result.up_edge.slope},
+                {"intercept", result.up_edge.intercept}
+            };
+        }
+        if (result.dn_edge.valid) {
+            result_json["dn_edge"] = {
+                {"slope", result.dn_edge.slope},
+                {"intercept", result.dn_edge.intercept}
+            };
+        }
+        if (!result.gap_lines.empty()) {
+            json gls = json::array();
+            for (const auto& gl : result.gap_lines) {
+                gls.push_back({
+                    {"up_x", gl.up_x}, {"up_y", gl.up_y},
+                    {"dn_x", gl.dn_x}, {"dn_y", gl.dn_y},
+                    {"gap_distance_mm", gl.gap_distance_mm}
+                });
+            }
+            result_json["gap_lines"] = gls;
+        }
+
         publisher.publish_json("Visual2D", result_json.dump());
         wss_server.broadcast_json("core/result", result_json.dump());
-
-        if (!left.data->empty()) {
-            cv::Mat img = cv::imdecode(*left.data, cv::IMREAD_COLOR);
-            if (!img.empty()) {
-                for (const auto& d : result.ai_detections) {
-                    if (d.coordinates.size() >= 2) {
-                        auto& p1 = d.coordinates[0];
-                        auto& p2 = d.coordinates[1];
-                        cv::rectangle(img,
-                            cv::Point(static_cast<int>(p1.first), static_cast<int>(p1.second)),
-                            cv::Point(static_cast<int>(p2.first), static_cast<int>(p2.second)),
-                            cv::Scalar(0, 255, 0), 2);
-                        std::string label = d.label_id + " " +
-                            std::to_string(d.confidence).substr(0, 4);
-                        int baseline = 0;
-                        auto ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.6, 2, &baseline);
-                        int y_pos = std::max(0, static_cast<int>(p1.second) - 5);
-                        cv::putText(img, label, cv::Point(static_cast<int>(p1.first), y_pos),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
-                    }
-                }
-
-                std::string wd_text = "WD: " +
-                    std::to_string(result.working_distance_mm).substr(0, 6) + "mm";
-                cv::putText(img, wd_text, cv::Point(10, 30),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 255), 2);
-
-                if (sub_task == InspectionSubTask::Installation) {
-                    bool wd_ok = (result.working_distance_mm >= 300.0 &&
-                                  result.working_distance_mm <= 1000.0);
-                    std::string status = wd_ok ? "WD OK" : "WD OUT OF RANGE";
-                    cv::Scalar color = wd_ok ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
-                    cv::putText(img, status, cv::Point(10, 60),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.7, color, 2);
-                }
-
-                std::vector<uint8_t> annotated;
-                cv::imencode(".jpg", img, annotated, {cv::IMWRITE_JPEG_QUALITY, 80});
-                if (!annotated.empty()) {
-                    wss_server.broadcast_binary("core/result_image",
-                        annotated.data(), annotated.size(), result_json.dump());
-                }
-            }
-        }
 
         Logger::info("Result published: txn=" + result.transaction_id
                      + " gap=" + std::to_string(result.gap_distance_mm) + "mm"
@@ -642,6 +633,8 @@ int main(int argc, char* argv[]) {
                 db.records().set_active_record(record_path);
 
                 preprocess.start_inspection(record_path);
+                installation_wd_sum = 0.0;
+                installation_wd_count = 0;
 
                 return make_response(0, "Inspection started",
                                      R"({"record_path":")" + record_path + "\"}");

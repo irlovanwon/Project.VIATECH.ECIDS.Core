@@ -50,26 +50,70 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
     result.abnormal = extracted.abnormals;
 
     if (sub_task == InspectionSubTask::GapInspection) {
-        if (!extracted.up_cleats.empty() && !extracted.dn_cleats.empty()) {
+        // Task2 uses riser_cleats as up edge instead of tread_cleat_up
+        const auto& up_cleats = (result.task_id == "T2" && extracted.up_cleats.empty())
+                                ? extracted.riser_cleats : extracted.up_cleats;
+
+        if (!up_cleats.empty() && !extracted.dn_cleats.empty()) {
             EdgeFitter fitter;
-            Line2D up_edge = fitter.fit_up_edge(extracted.up_cleats);
-            Line2D dn_edge = fitter.fit_dn_edge(extracted.dn_cleats);
+            Line2D up_line = fitter.fit_up_edge(up_cleats);
+            Line2D dn_line = fitter.fit_dn_edge(extracted.dn_cleats);
 
-            if (up_edge.valid && dn_edge.valid) {
+            if (up_line.valid) {
+                result.up_edge.valid = true;
+                result.up_edge.slope = up_line.slope;
+                result.up_edge.intercept = up_line.intercept;
+            }
+            if (dn_line.valid) {
+                result.dn_edge.valid = true;
+                result.dn_edge.slope = dn_line.slope;
+                result.dn_edge.intercept = dn_line.intercept;
+            }
+
+            if (up_line.valid && dn_line.valid) {
+                // Estimate image dimensions from detection coordinates
+                double max_y = 720.0; // fallback
+                for (const auto& det : response.results) {
+                    for (const auto& c : det.coordinates) {
+                        if (c.second > max_y) max_y = c.second;
+                    }
+                }
+                const double margin = max_y * 0.10; // 10% top/bottom margin
+
                 GapLocalizer localizer;
-                auto gaps = localizer.locate_all_gaps(up_edge, dn_edge, extracted.gaps);
+                auto gaps = localizer.locate_all_gaps(up_line, dn_line, extracted.gaps);
 
-                if (!gaps.empty() && left_data && right_data) {
-                    double best_distance = 0.0;
-                    for (const auto& gap : gaps) {
+                for (const auto& gap : gaps) {
+                    // Gap position filtering: discard if near image top/bottom
+                    double gap_center_y = (gap.up_point.y + gap.dn_point.y) / 2.0;
+                    if (gap_center_y < margin || gap_center_y > max_y - margin) {
+                        Logger::debug("Postprocess: gap filtered (y=" +
+                                      std::to_string(gap_center_y) + " near edge)");
+                        continue;
+                    }
+
+                    if (left_data && right_data) {
                         double dist = gap_dist_.calculate(gap, left_data, left_size,
                                                          right_data, right_size);
-                        if (dist > best_distance) best_distance = dist;
-                    }
-                    result.gap_distance_mm = best_distance;
+                        GapLineInfo info;
+                        info.valid = true;
+                        info.up_x = gap.up_point.x;
+                        info.up_y = gap.up_point.y;
+                        info.dn_x = gap.dn_point.x;
+                        info.dn_y = gap.dn_point.y;
+                        info.gap_distance_mm = dist;
+                        result.gap_lines.push_back(info);
 
+                        if (dist > result.gap_distance_mm) {
+                            result.gap_distance_mm = dist;
+                        }
+                    }
+                }
+
+                if (result.gap_distance_mm > 0) {
                     Logger::info("Postprocess: gap distance = "
-                                 + std::to_string(best_distance) + "mm (task " + result.task_id + ")");
+                                 + std::to_string(result.gap_distance_mm) + "mm (task "
+                                 + result.task_id + ")");
                 }
             }
         }

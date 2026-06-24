@@ -133,6 +133,19 @@ struct DetectionResponse {
     std::string ts_replied;
 };
 
+struct FittedEdge {
+    bool valid = false;
+    double slope = 0.0;
+    double intercept = 0.0;
+};
+
+struct GapLineInfo {
+    bool valid = false;
+    double up_x = 0.0, up_y = 0.0;
+    double dn_x = 0.0, dn_y = 0.0;
+    double gap_distance_mm = 0.0;
+};
+
 struct InspectionResult {
     std::string transaction_id;
     std::string task_id;
@@ -144,6 +157,9 @@ struct InspectionResult {
     std::vector<Detection> abnormal;
     std::string timestamp;
     std::vector<std::string> image_files;
+    FittedEdge up_edge;
+    FittedEdge dn_edge;
+    std::vector<GapLineInfo> gap_lines;
 };
 
 struct DBWriteRequest {

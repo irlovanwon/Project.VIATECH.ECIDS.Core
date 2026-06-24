@@ -193,13 +193,26 @@ void DetectionDealer::poll_loop_() {
             json resp = json::parse(hdr_str);
 
             DetectionResponse dr;
-            dr.transaction_id = resp.value("TransactionID", "");
-            dr.dealer_id = resp.value("DealerID", "");
+            dr.transaction_id = resp.value("TransactionID", resp.value("transaction_id", ""));
+            dr.dealer_id = resp.value("DealerID", resp.value("dealer_id", ""));
             dr.ts_received = resp.value("TimestampReceived", "");
             dr.ts_replied = resp.value("TimestampReplied", "");
 
+            json result_array;
             if (resp.contains("Result") && resp["Result"].is_array()) {
-                for (const auto& det : resp["Result"]) {
+                result_array = resp["Result"];
+            } else if (parts.size() > 1) {
+                std::string body_str(parts[1].begin(), parts[1].end());
+                json body = json::parse(body_str);
+                if (body.contains("TransactionID"))
+                    dr.transaction_id = body.value("TransactionID", dr.transaction_id);
+                if (body.contains("Result") && body["Result"].is_array()) {
+                    result_array = body["Result"];
+                }
+            }
+
+            if (!result_array.empty()) {
+                for (const auto& det : result_array) {
                     Detection d;
                     d.label_id = det.value("LabelID", "");
                     d.confidence = std::stod(det.value("Confidence", "0.0"));

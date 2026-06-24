@@ -18,3 +18,5 @@ certs/
 # OS
 .DS_Store
 Thumbs.db
+*.bak
+*.pid

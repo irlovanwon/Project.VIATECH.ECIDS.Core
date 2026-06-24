@@ -111,7 +111,9 @@ static double calculate_working_distance(const uint8_t* depth_data, size_t depth
 
     size_t w = 1920;
     size_t h = count / w;
-    if (h == 0 || w * h != count) return 0.0;
+    if (h == 0 || w * h != count) {
+        return 0.0;
+    }
 
     size_t cy_start = h * 3 / 10;
     size_t cy_end = h * 7 / 10;
@@ -123,12 +125,15 @@ static double calculate_working_distance(const uint8_t* depth_data, size_t depth
     for (size_t y = cy_start; y < cy_end; ++y) {
         for (size_t x = cx_start; x < cx_end; ++x) {
             float d = floats[y * w + x];
-            if (d > 100.0 && d < 5000.0) {
-                sum += d;
+            if (std::isnan(d) || std::isinf(d) || d == 0.0f) continue;
+            double d_mm = d * 1000.0;
+            if (d_mm > 100.0 && d_mm < 5000.0) {
+                sum += d_mm;
                 ++valid;
             }
         }
     }
+
     if (valid == 0) return 0.0;
     return sum / valid;
 }
@@ -164,7 +169,8 @@ void PreprocessModule::inspection_loop_() {
 
         if (sub == InspectionSubTask::Installation) {
             DataBundle depth;
-            if (buffer_->dequeue_depth(depth, 0) && !depth.data->empty()) {
+            bool got_depth = buffer_->dequeue_depth(depth, 0);
+            if (got_depth && !depth.data->empty()) {
                 working_dist = calculate_working_distance(depth.data->data(), depth.data->size());
             }
         }
@@ -319,6 +325,17 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
             sub = it->second.sub_task;
             working_dist = it->second.working_distance_mm;
             pending_.erase(it);
+        } else {
+            if (!pending_.empty()) {
+                auto oldest = std::min_element(pending_.begin(), pending_.end(),
+                    [](const auto& a, const auto& b) { return a.first < b.first; });
+                left = oldest->second.left;
+                right = oldest->second.right;
+                pidx = oldest->second.pair_index;
+                sub = oldest->second.sub_task;
+                working_dist = oldest->second.working_distance_mm;
+                pending_.erase(oldest);
+            }
         }
     }
 
