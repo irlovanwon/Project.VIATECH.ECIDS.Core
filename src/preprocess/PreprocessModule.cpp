@@ -215,43 +215,49 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
 
     std::vector<uint8_t> l_enc = encode_jpeg_(left.data->data(), left.data->size(), 95);
 
-    if (ai_mode_ != AIMode::Binary && !active_record_path_.empty() && record_mgr_) {
-        std::string lfile = record_mgr_->save_image(
-            active_record_path_, subfolder, "L", idx,
-            l_enc.data(), l_enc.size());
+    bool is_gap = (sub_task_.load() == InspectionSubTask::GapInspection ||
+                   sub_task_.load() == InspectionSubTask::Marking);
 
-        std::vector<std::string> uris = {active_record_path_ + "/" + subfolder + "/" + lfile};
-        std::vector<std::string> fns = {lfile};
-
-        if (!right.data->empty()) {
-            std::vector<uint8_t> r_enc = encode_jpeg_(right.data->data(), right.data->size(), 95);
-            std::string rfile = record_mgr_->save_image(
-                active_record_path_, subfolder, "R", idx,
-                r_enc.data(), r_enc.size());
-            uris.push_back(active_record_path_ + "/" + subfolder + "/" + rfile);
-            fns.push_back(rfile);
-        }
-
-        if (dealer_) {
-            dealer_->send_file_request(ts, uris, fns);
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(pending_mutex_);
-            if (pending_.size() > 200) pending_.clear();
-            pending_[ts] = {ts, DataBundle{}, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
-        }
-    } else if (ai_mode_ == AIMode::Binary && dealer_) {
+    if (ai_mode_ == AIMode::Binary && dealer_) {
         dealer_->send_binary_request(ts,
             l_enc.data(), l_enc.size(),
             right.data->empty() ? nullptr : right.data->data(),
             right.data->size());
+    } else if (dealer_) {
+        if (!active_record_path_.empty() && record_mgr_) {
+            std::string lfile = record_mgr_->save_image(
+                active_record_path_, subfolder, "L", idx,
+                l_enc.data(), l_enc.size());
+            std::vector<std::string> uris = {active_record_path_ + "/" + subfolder + "/" + lfile};
+            std::vector<std::string> fns = {lfile};
 
-        {
-            std::lock_guard<std::mutex> lock(pending_mutex_);
-            if (pending_.size() > 200) pending_.clear();
-            pending_[ts] = {ts, DataBundle{}, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
+            if (!right.data->empty()) {
+                std::vector<uint8_t> r_enc = encode_jpeg_(right.data->data(), right.data->size(), 95);
+                std::string rfile = record_mgr_->save_image(
+                    active_record_path_, subfolder, "R", idx,
+                    r_enc.data(), r_enc.size());
+                uris.push_back(active_record_path_ + "/" + subfolder + "/" + rfile);
+                fns.push_back(rfile);
+            }
+            dealer_->send_file_request(ts, uris, fns);
         }
+    }
+
+    if (is_gap && !active_record_path_.empty() && record_mgr_) {
+        record_mgr_->save_image(
+            active_record_path_, subfolder, "L", idx,
+            l_enc.data(), l_enc.size());
+    }
+
+    DataBundle left_store;
+    if (!is_gap) {
+        left_store.data = std::make_shared<std::vector<uint8_t>>(std::move(l_enc));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        if (pending_.size() > 200) pending_.clear();
+        pending_[ts] = {ts, left_store, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
     }
 }
 
@@ -301,9 +307,15 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
         }
     }
 
-    if (ai_mode_ != AIMode::Binary && !active_record_path_.empty() && record_mgr_) {
+    if (!active_record_path_.empty() && record_mgr_) {
         std::string subfolder = (sub == InspectionSubTask::Installation) ? "installation" : "inspection";
         if (ai_test_mode_.load()) subfolder = "";
+
+        if (sub == InspectionSubTask::Installation && !left.data->empty()) {
+            record_mgr_->save_image(
+                active_record_path_, subfolder, "L", pidx,
+                left.data->data(), left.data->size());
+        }
 
         std::string ai_json_str;
         {
