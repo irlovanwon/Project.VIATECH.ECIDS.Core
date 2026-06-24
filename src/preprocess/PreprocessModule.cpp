@@ -153,7 +153,8 @@ void PreprocessModule::inspection_loop_() {
             auto now = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - last_ai_send).count();
-            if (elapsed_ms < 500) {
+            int min_interval_ms = static_cast<int>(1000.0 / installation_fps_);
+            if (elapsed_ms < min_interval_ms) {
                 continue;
             }
             last_ai_send = now;

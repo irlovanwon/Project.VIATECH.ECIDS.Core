@@ -51,6 +51,7 @@ public:
     void init(DataBuffer* buffer, DetectionDealer* dealer,
               RecordManager* record_mgr, AIMode ai_mode);
     void set_result_callback(ResultCallback cb);
+    void set_installation_fps(double fps) { installation_fps_ = fps; }
 
     void start_inspection(const std::string& record_path);
     void stop_inspection();
@@ -77,6 +78,7 @@ private:
     RecordManager* record_mgr_ = nullptr;
     AIMode ai_mode_ = AIMode::File;
     ResultCallback callback_;
+    double installation_fps_ = 1.0;
 
     std::thread thread_;
     std::atomic<bool> running_{false};

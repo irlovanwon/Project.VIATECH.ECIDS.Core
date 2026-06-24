@@ -373,6 +373,7 @@ int main(int argc, char* argv[]) {
 
     PreprocessModule preprocess;
     preprocess.init(&buffer, &dealer, &db.records(), ai_mode);
+    preprocess.set_installation_fps(cfg.get_double("preprocess.installation_fps", 1.0));
 
     TaskManager task_mgr;
 
