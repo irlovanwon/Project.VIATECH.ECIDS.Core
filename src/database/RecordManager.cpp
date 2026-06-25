@@ -61,12 +61,19 @@ std::string RecordManager::create_inspection_record(const std::string& station_i
     return full_path;
 }
 
-std::string RecordManager::create_ai_test_record() {
+std::string RecordManager::create_ai_test_record(const std::string& station_id,
+                                                     const std::string& escalator_id) {
     auto parts = Timestamp::now_parts();
     std::string date_path = Timestamp::db_date_path_from_parts(parts);
     std::string folder_part = Timestamp::db_folder_part_from_parts(parts);
 
     std::string record_name = "(AI Test)" + folder_part;
+    if (!station_id.empty()) {
+        record_name += "-" + station_id;
+        if (!escalator_id.empty()) {
+            record_name += "-" + escalator_id;
+        }
+    }
     std::string full_path = root_path_ + "/" + date_path + "/" + record_name;
     ensure_dir_(full_path);
     active_record_ = full_path;

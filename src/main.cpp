@@ -129,8 +129,13 @@ static json scan_inspection_records(const std::string& db_root) {
         while (!rel.empty() && rel[0] == '/') rel = rel.substr(1);
         rec["path"] = rel;
         rec["inspectionDate"] = date_str + (time_str.empty() ? "" : " " + time_str);
-        rec["stationId"] = is_ai_test ? "--" : station;
-        rec["escalatorId"] = is_ai_test ? "--" : escalator;
+        if (is_ai_test) {
+            rec["stationId"] = station.empty() ? "--" : station;
+            rec["escalatorId"] = escalator.empty() ? "--" : escalator;
+        } else {
+            rec["stationId"] = station;
+            rec["escalatorId"] = escalator;
+        }
         rec["taskId"] = is_ai_test ? "--" : task;
 
         std::string op_type;
@@ -236,8 +241,14 @@ static json read_record_details(const std::string& db_root,
                     data.value("working_distance_mm", 0.0) * 10.0) / 10.0;
 
                 std::string det = "Normal";
-                if (data.contains("ai_detections") && data["ai_detections"].is_array()) {
-                    for (const auto& d : data["ai_detections"]) {
+                auto check_dets = [&](const std::string& key) -> const json* {
+                    if (data.contains(key) && data[key].is_array()) return &data[key];
+                    return nullptr;
+                };
+                const json* dets = check_dets("ai_detections");
+                if (!dets) dets = check_dets("detections");
+                if (dets) {
+                    for (const auto& d : *dets) {
                         if (d.value("confidence", 0.0) >= 0.5) {
                             det = (d.value("label_id", 0) == 1) ? "Warning" : "Defect";
                             break;
@@ -783,6 +794,8 @@ int main(int argc, char* argv[]) {
             try {
                 json req = json::parse(body);
                 std::string test_data = req.value("test_data_path", "");
+                std::string station_id = req.value("station_id", "");
+                std::string escalator_id = req.value("escalator_id", "");
 
                 if (test_data.empty()) {
                     return make_response(4, "test_data_path is required");
@@ -799,7 +812,7 @@ int main(int argc, char* argv[]) {
                 task_mgr.start_ai_test(test_data);
                 StatusTracker::instance().set_task_active(true);
 
-                std::string record_path = db.records().create_ai_test_record();
+                std::string record_path = db.records().create_ai_test_record(station_id, escalator_id);
                 db.records().set_active_record(record_path);
 
                 preprocess.start_ai_test(test_data, record_path);

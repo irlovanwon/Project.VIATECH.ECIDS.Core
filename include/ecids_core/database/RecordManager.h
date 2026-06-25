@@ -24,7 +24,8 @@ public:
                                          const std::string& escalator_id,
                                          const std::string& task_id);
 
-    std::string create_ai_test_record();
+    std::string create_ai_test_record(const std::string& station_id = "",
+                                            const std::string& escalator_id = "");
 
     std::string save_image(const std::string& record_path,
                            const std::string& subfolder,
