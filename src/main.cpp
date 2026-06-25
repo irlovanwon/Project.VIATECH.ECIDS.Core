@@ -288,6 +288,12 @@ int main(int argc, char* argv[]) {
     }
     publisher.start();
 
+    std::thread([&ai_client]() {
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        std::string resp = ai_client.send_command("Reconnect");
+        Logger::info("AIVD reconnect notification: " + resp);
+    }).detach();
+
     WSSServer wss_server;
 
     DataSubscriber subscriber;
