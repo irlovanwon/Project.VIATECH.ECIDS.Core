@@ -66,6 +66,16 @@ static json scan_inspection_records(const std::string& db_root) {
     json records = json::array();
     if (!fs::exists(db_root)) return records;
 
+    auto dir_has_files = [](const std::string& dir) -> bool {
+        if (!fs::exists(dir)) return false;
+        try {
+            for (auto& e : fs::directory_iterator(dir)) {
+                if (e.is_regular_file()) return true;
+            }
+        } catch (...) {}
+        return false;
+    };
+
     std::vector<fs::path> record_dirs;
     try {
         for (auto& yr : fs::directory_iterator(db_root)) {
@@ -77,7 +87,8 @@ static json scan_inspection_records(const std::string& db_root) {
                     for (auto& rec : fs::directory_iterator(dy.path())) {
                         if (!rec.is_directory()) continue;
                         std::string name = rec.path().filename().string();
-                        if (name.rfind("(Inspection)", 0) != 0) continue;
+                        if (name.rfind("(Inspection)", 0) != 0
+                            && name.rfind("(AI Test)", 0) != 0) continue;
                         record_dirs.push_back(rec.path());
                     }
                 }
@@ -87,7 +98,9 @@ static json scan_inspection_records(const std::string& db_root) {
 
     for (const auto& rdir : record_dirs) {
         std::string dirname = rdir.filename().string();
-        std::string after = dirname.substr(std::string("(Inspection)").size());
+        bool is_ai_test = (dirname.rfind("(AI Test)", 0) == 0);
+        std::string prefix = is_ai_test ? "(AI Test)" : "(Inspection)";
+        std::string after = dirname.substr(prefix.size());
 
         std::vector<std::string> toks;
         {
@@ -101,15 +114,13 @@ static json scan_inspection_records(const std::string& db_root) {
         }
 
         std::string date_str, time_str, station, escalator, task;
-        if (toks.size() >= 3) {
-            date_str = toks[0] + "-" + toks[1] + "-" + toks[2];
+        if (toks.size() >= 3) date_str = toks[0] + "-" + toks[1] + "-" + toks[2];
+        if (toks.size() >= 6) time_str = toks[3] + ":" + toks[4] + ":" + toks[5];
+        if (!is_ai_test) {
+            if (toks.size() >= 7) station = toks[6];
+            if (toks.size() >= 8) escalator = toks[7];
+            if (toks.size() >= 9) task = toks[8];
         }
-        if (toks.size() >= 6) {
-            time_str = toks[3] + ":" + toks[4] + ":" + toks[5];
-        }
-        if (toks.size() >= 7) station = toks[6];
-        if (toks.size() >= 8) escalator = toks[7];
-        if (toks.size() >= 9) task = toks[8];
 
         json rec;
         rec["id"] = dirname;
@@ -118,17 +129,31 @@ static json scan_inspection_records(const std::string& db_root) {
         while (!rel.empty() && rel[0] == '/') rel = rel.substr(1);
         rec["path"] = rel;
         rec["inspectionDate"] = date_str + (time_str.empty() ? "" : " " + time_str);
-        rec["stationId"] = station;
-        rec["escalatorId"] = escalator;
-        rec["taskId"] = task;
+        rec["stationId"] = is_ai_test ? "--" : station;
+        rec["escalatorId"] = is_ai_test ? "--" : escalator;
+        rec["taskId"] = is_ai_test ? "--" : task;
 
-        std::string insp_dir = rdir.string() + "/inspection";
+        std::string op_type;
+        if (is_ai_test) {
+            op_type = "AI Test";
+        } else if (dir_has_files(rdir.string() + "/inspection")) {
+            op_type = "Gap Inspection";
+        } else if (dir_has_files(rdir.string() + "/marking")) {
+            op_type = "1st Step Marking";
+        } else if (dir_has_files(rdir.string() + "/installation")) {
+            op_type = "Installation";
+        } else {
+            op_type = "Gap Inspection";
+        }
+        rec["operationType"] = op_type;
+
+        std::string stereo_dir = is_ai_test ? rdir.string() : (rdir.string() + "/inspection");
         double gap_sum = 0;
         int gap_count = 0, gaps_over5 = 0, defects = 0, step_count = 0;
 
-        if (fs::exists(insp_dir)) {
+        if (fs::exists(stereo_dir)) {
             std::vector<fs::path> jfiles;
-            for (auto& f : fs::directory_iterator(insp_dir)) {
+            for (auto& f : fs::directory_iterator(stereo_dir)) {
                 if (f.is_regular_file() && f.path().extension() == ".json") {
                     std::string fn = f.path().filename().string();
                     if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
@@ -513,6 +538,7 @@ int main(int argc, char* argv[]) {
             for (int i = 0; i < 120; ++i) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
+            preprocess.stop_ai_test();
             task_mgr.stop();
             StatusTracker::instance().set_task_active(false);
             db.records().set_active_record("");
