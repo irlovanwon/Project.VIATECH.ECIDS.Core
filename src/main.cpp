@@ -383,8 +383,7 @@ int main(int argc, char* argv[]) {
     static double installation_wd_sum = 0.0;
     static int installation_wd_count = 0;
 
-    preprocess.set_result_callback([&](const std::string& txn_id,
-                                       const DetectionResponse& resp,
+    preprocess.set_result_callback([&](const std::string& txn_id,                                       const DetectionResponse& resp,
                                        const DataBundle& left,
                                        const DataBundle& right,
                                        int pair_index,
@@ -499,6 +498,26 @@ int main(int argc, char* argv[]) {
         Logger::info("Result published: txn=" + result.transaction_id
                      + " gap=" + std::to_string(result.gap_distance_mm) + "mm"
                      + " wd=" + std::to_string(result.working_distance_mm) + "mm");
+    });
+
+    preprocess.set_completion_callback([&]() {
+        Logger::info("AI test iteration complete — waiting for pending AI results");
+
+        std::thread([&]() {
+            for (int i = 0; i < 120; ++i) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+            task_mgr.stop();
+            StatusTracker::instance().set_task_active(false);
+            db.records().set_active_record("");
+            ModeController::instance().set_mode(Mode::None);
+
+            json status;
+            status["task"] = "ai_test";
+            status["status"] = "completed";
+            wss_server.broadcast_json("core/status", status.dump());
+            Logger::info("AI test: all results processed, completion notification sent");
+        }).detach();
     });
 
     ClientServer client_server;
@@ -641,6 +660,10 @@ int main(int argc, char* argv[]) {
                     return make_response(4, "station_id and escalator_id are required");
                 }
 
+                if (StatusTracker::instance().task_active()) {
+                    return make_response(6, "TaskConflict: another task is active, stop first");
+                }
+
                 auto rc = ModeController::instance().set_mode(Mode::Inspection);
                 if (rc != ResponseCode::Success && rc != ResponseCode::AlreadyInit) {
                     return make_response(static_cast<int>(rc), response_code_name(rc));
@@ -679,6 +702,15 @@ int main(int argc, char* argv[]) {
             return make_response(0, "Inspection stopped");
         }
 
+        if (method == "POST" && path == "/StopAITest") {
+            preprocess.stop_ai_test();
+            task_mgr.stop();
+            StatusTracker::instance().set_task_active(false);
+            db.records().set_active_record("");
+            ModeController::instance().set_mode(Mode::None);
+            return make_response(0, "AI test stopped");
+        }
+
         if (method == "POST" && path == "/SetSubTask") {
             try {
                 json req = json::parse(body);
@@ -703,6 +735,14 @@ int main(int argc, char* argv[]) {
                 json req = json::parse(body);
                 std::string test_data = req.value("test_data_path", "");
 
+                if (test_data.empty()) {
+                    return make_response(4, "test_data_path is required");
+                }
+
+                if (StatusTracker::instance().task_active()) {
+                    return make_response(6, "TaskConflict: another task is active, stop first");
+                }
+
                 auto rc2 = ModeController::instance().set_mode(Mode::AITest);
                 if (rc2 != ResponseCode::Success && rc2 != ResponseCode::AlreadyInit) {
                     return make_response(static_cast<int>(rc2), response_code_name(rc2));
@@ -713,7 +753,7 @@ int main(int argc, char* argv[]) {
                 std::string record_path = db.records().create_ai_test_record();
                 db.records().set_active_record(record_path);
 
-                preprocess.start_ai_test(test_data);
+                preprocess.start_ai_test(test_data, record_path);
 
                 return make_response(0, "AI test started",
                                      R"({"record_path":")" + record_path + "\"}");

@@ -82,8 +82,9 @@ std::string PreprocessModule::current_subfolder_() const {
     }
 }
 
-void PreprocessModule::start_ai_test(const std::string& test_data_path) {
+void PreprocessModule::start_ai_test(const std::string& test_data_path, const std::string& record_path) {
     test_data_path_ = test_data_path;
+    active_record_path_ = record_path;
     ai_test_mode_ = true;
     pair_index_ = 0;
     running_ = true;
@@ -215,6 +216,10 @@ void PreprocessModule::ai_test_loop_() {
     }
 
     Logger::info("PreprocessModule: AI test image iteration complete");
+
+    if (completion_callback_) {
+        completion_callback_();
+    }
 }
 
 static std::vector<uint8_t> encode_jpeg_(const uint8_t* raw, size_t sz, int quality) {
@@ -317,7 +322,18 @@ void PreprocessModule::process_file_(const std::string& filepath) {
     std::string ts = Timestamp::now_string();
     std::string filename = fs::path(filepath).filename().string();
 
-    if (dealer_) {
+    if (ai_mode_ == AIMode::Binary && dealer_) {
+        cv::Mat img = cv::imread(filepath);
+        if (!img.empty()) {
+            std::vector<uint8_t> jpeg;
+            cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95});
+            dealer_->send_binary_request(ts,
+                jpeg.data(), jpeg.size(),
+                nullptr, 0);
+        } else {
+            Logger::error("PreprocessModule: failed to read image: " + filepath);
+        }
+    } else if (dealer_) {
         dealer_->send_file_request(ts, {filepath}, {filename});
     }
 

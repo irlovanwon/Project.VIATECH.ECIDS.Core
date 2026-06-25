@@ -45,12 +45,15 @@ public:
                                               InspectionSubTask sub_task,
                                               double working_distance_mm)>;
 
+    using CompletionCallback = std::function<void()>;
+
     PreprocessModule();
     ~PreprocessModule();
 
     void init(DataBuffer* buffer, DetectionDealer* dealer,
               RecordManager* record_mgr, AIMode ai_mode);
     void set_result_callback(ResultCallback cb);
+    void set_completion_callback(CompletionCallback cb) { completion_callback_ = std::move(cb); }
     void set_installation_fps(double fps) { installation_fps_ = fps; }
 
     void start_inspection(const std::string& record_path);
@@ -59,7 +62,7 @@ public:
     void set_sub_task(InspectionSubTask st);
     InspectionSubTask sub_task() const { return sub_task_; }
 
-    void start_ai_test(const std::string& test_data_path);
+    void start_ai_test(const std::string& test_data_path, const std::string& record_path = "");
     void stop_ai_test();
 
     void stop();
@@ -78,6 +81,7 @@ private:
     RecordManager* record_mgr_ = nullptr;
     AIMode ai_mode_ = AIMode::File;
     ResultCallback callback_;
+    CompletionCallback completion_callback_;
     double installation_fps_ = 1.0;
 
     std::thread thread_;
