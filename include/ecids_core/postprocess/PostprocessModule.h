@@ -37,6 +37,8 @@ public:
                              double working_distance_mm = 0.0);
 
     InspectionResult process_ai_test(const DetectionResponse& response,
+                                     const uint8_t* left_data, size_t left_size,
+                                     const uint8_t* right_data, size_t right_size,
                                      int pair_index = 0);
 
 private:
@@ -44,6 +46,9 @@ private:
     GapDistance gap_dist_;
     RecordManager* record_mgr_ = nullptr;
     double min_confidence_ = 0.5;
+
+    std::vector<uint8_t> annotate_image_(const uint8_t* data, size_t size,
+                                         const InspectionResult& result);
 };
 
 } // namespace ecids_core

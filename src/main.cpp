@@ -512,7 +512,10 @@ int main(int argc, char* argv[]) {
         InspectionResult result;
 
         if (mode == Mode::AITest) {
-            result = postprocess.process_ai_test(resp, pair_index);
+            result = postprocess.process_ai_test(resp,
+                left.data->data(), left.data->size(),
+                right.data->data(), right.data->size(),
+                pair_index);
         } else {
             result = postprocess.process(resp,
                 task_mgr.inspection().station_id,
@@ -830,8 +833,10 @@ int main(int argc, char* argv[]) {
                 db.records().set_active_record(record_path);
 
                 g_processing_paused.store(false);
+                sc_client.send_command("POST", "/Init", R"({"camera_id":"cam1"})");
+                sc_client.send_command("POST", "/Connect", R"({"camera_id":"cam1"})");
                 sc_client.send_command("POST", "/StartCapture",
-                    R"({"camera_id":0,"types":["visual_geometric_2d","visual_geometric_3d","sensor_tracking"]})");
+                    R"({"camera_id":"cam1","data_types":["stereo_image","depth_map"]})");
 
                 preprocess.start_inspection(record_path);
                 installation_wd_sum = 0.0;
@@ -852,7 +857,7 @@ int main(int argc, char* argv[]) {
             ModeController::instance().set_mode(Mode::None);
             g_processing_paused.store(true);
             sc_client.send_command("POST", "/StopCapture",
-                R"({"camera_id":0,"types":["visual_geometric_2d","visual_geometric_3d","sensor_tracking"]})");
+                R"({"camera_id":"cam1","data_types":["stereo_image","depth_map"]})");
             return make_response(0, "Inspection stopped");
         }
 
