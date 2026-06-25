@@ -639,6 +639,33 @@ int main(int argc, char* argv[]) {
             wss_server.broadcast_json("core/status", status.dump());
             Logger::info("AI test: all results processed, completion notification sent");
         }).detach();
+
+    // FIX 2: SC health check — detect SC restart and re-arm StartCapture
+    std::thread([&sc_client]() {
+        bool sc_was_down = false;
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            std::string resp = sc_client.send_command("GET", "/CheckStatus");
+            bool sc_up = (resp.find("\"code\":0") != std::string::npos);
+
+            if (!sc_up) {
+                if (!sc_was_down) {
+                    Logger::warn("SC health check: StereoCamera not responding");
+                }
+                sc_was_down = true;
+            } else if (sc_was_down) {
+                sc_was_down = false;
+                Logger::info("SC health check: StereoCamera back online");
+                if (ModeController::instance().active_mode() == Mode::Inspection) {
+                    Logger::info("SC health check: re-arming Init+Connect+StartCapture");
+                    sc_client.send_command("POST", "/Init", R"({"camera_id":"cam1"})");
+                    sc_client.send_command("POST", "/Connect", R"({"camera_id":"cam1"})");
+                    sc_client.send_command("POST", "/StartCapture",
+                        R"({"camera_id":"cam1","data_types":["stereo_image","depth_map"]})");
+                }
+            }
+        }
+    }).detach();
     });
 
     ClientServer client_server;

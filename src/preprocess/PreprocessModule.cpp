@@ -483,6 +483,15 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
             if (!pending_.empty()) {
                 auto oldest = std::min_element(pending_.begin(), pending_.end(),
                     [](const auto& a, const auto& b) { return a.first < b.first; });
+                // Skip stale entries (>30s old, likely orphaned by restart)
+                auto age = std::chrono::steady_clock::now() - oldest->second.created_at;
+                if (age > std::chrono::seconds(30)) {
+                    Logger::warn("PreprocessModule: skipping stale pending entry (age=" +
+                                 std::to_string(std::chrono::duration_cast<std::chrono::seconds>(age).count()) +
+                                 "s), likely orphaned by restart");
+                    pending_.erase(oldest);
+                    return;
+                }
                 left = oldest->second.left;
                 right = oldest->second.right;
                 pidx = oldest->second.pair_index;

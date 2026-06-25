@@ -18,6 +18,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <chrono>
 #include <unordered_map>
 
 namespace ecids_core {
@@ -35,6 +36,7 @@ public:
         int pair_index = 0;
         InspectionSubTask sub_task = InspectionSubTask::None;
         double working_distance_mm = 0.0;
+        std::chrono::steady_clock::time_point created_at = std::chrono::steady_clock::now();
     };
 
     using ResultCallback = std::function<void(const std::string& transaction_id,

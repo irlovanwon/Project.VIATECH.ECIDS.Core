@@ -37,6 +37,10 @@ bool DataBuffer::get_latest_copy(const std::string& channel, FrameHeader& header
 
 void DataBuffer::put_stereo(uint64_t pair_id, const std::string& part, const DataBundle& bundle) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // Prevent unbounded growth from orphaned half-pairs (SC restart mid-pair)
+    if (stereo_pairs_.size() > 50) {
+        stereo_pairs_.erase(stereo_pairs_.begin());
+    }
     auto& pair = stereo_pairs_[pair_id];
     if (part == "left") {
         pair.left = bundle;
