@@ -35,6 +35,8 @@
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <dirent.h>
+#include <errno.h>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -152,11 +154,21 @@ static json scan_inspection_records(const std::string& db_root) {
         }
         rec["operationType"] = op_type;
 
-        std::string stereo_dir = is_ai_test ? rdir.string() : (rdir.string() + "/inspection");
         double gap_sum = 0;
         int gap_count = 0, gaps_over5 = 0, defects = 0, step_count = 0;
 
-        if (fs::exists(stereo_dir)) {
+        // Search all subfolders for Stereo files
+        std::vector<std::string> stereo_dirs;
+        if (is_ai_test) {
+            stereo_dirs.push_back(rdir.string());
+        } else {
+            for (const auto& sub : {"installation", "inspection", "marking"}) {
+                std::string sd = rdir.string() + "/" + sub;
+                if (fs::exists(sd)) stereo_dirs.push_back(sd);
+            }
+        }
+
+        for (const auto& stereo_dir : stereo_dirs) {
             std::vector<fs::path> jfiles;
             for (auto& f : fs::directory_iterator(stereo_dir)) {
                 if (f.is_regular_file() && f.path().extension() == ".json") {
@@ -164,7 +176,7 @@ static json scan_inspection_records(const std::string& db_root) {
                     if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
                 }
             }
-            step_count = static_cast<int>(jfiles.size());
+            step_count += static_cast<int>(jfiles.size());
             for (const auto& jf : jfiles) {
                 try {
                     std::ifstream ifs(jf);
@@ -212,17 +224,32 @@ static json read_record_details(const std::string& db_root,
     }
 
     json steps = json::array();
-    std::string insp_dir = full + "/inspection";
     bool is_ai_record = fs::path(full).filename().string().rfind("(AI Test)", 0) == 0;
-    std::string scan_dir = is_ai_record ? full : insp_dir;
 
-    if (fs::exists(scan_dir)) {
+    // Build list of directories to search for Stereo files
+    std::vector<std::string> subfolders;
+    subfolders.push_back("");
+    subfolders.push_back("installation");
+    subfolders.push_back("inspection");
+    subfolders.push_back("marking");
+
+    for (const auto& sub : subfolders) {
+        std::string dir = full;
+        if (!sub.empty()) dir += "/" + sub;
+
+        // Use POSIX opendir/readdir (more reliable than fs::directory_iterator for paths with spaces)
         std::vector<fs::path> jfiles;
-        for (auto& f : fs::directory_iterator(scan_dir)) {
-            if (f.is_regular_file() && f.path().extension() == ".json") {
-                std::string fn = f.path().filename().string();
-                if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
+        DIR* dh = opendir(dir.c_str());
+        if (dh) {
+            struct dirent* entry;
+            while ((entry = readdir(dh)) != nullptr) {
+                std::string fn = entry->d_name;
+                if (fn.size() > 5 && fn.substr(fn.size() - 5) == ".json" &&
+                    fn.rfind("Stereo_", 0) == 0) {
+                    jfiles.push_back(fs::path(dir) / fn);
+                }
             }
+            closedir(dh);
         }
         std::sort(jfiles.begin(), jfiles.end());
 
@@ -241,26 +268,39 @@ static json read_record_details(const std::string& db_root,
                     data.value("working_distance_mm", 0.0) * 10.0) / 10.0;
 
                 std::string det = "Normal";
-                auto check_dets = [&](const std::string& key) -> const json* {
-                    if (data.contains(key) && data[key].is_array()) return &data[key];
-                    return nullptr;
-                };
-                const json* dets = check_dets("ai_detections");
-                if (!dets) dets = check_dets("detections");
+                const json* dets = nullptr;
+                if (data.contains("ai_detections") && data["ai_detections"].is_array()) {
+                    dets = &data["ai_detections"];
+                } else if (data.contains("detections") && data["detections"].is_array()) {
+                    dets = &data["detections"];
+                }
                 if (dets) {
                     for (const auto& d : *dets) {
                         if (d.value("confidence", 0.0) >= 0.5) {
-                            det = (d.value("label_id", 0) == 1) ? "Warning" : "Defect";
+                            if (d.contains("label_id")) {
+                                if (d["label_id"].is_number_integer()) {
+                                    det = (d["label_id"].get<int>() == 1) ? "Warning" : "Defect";
+                                } else {
+                                    det = "Defect";
+                                }
+                            } else {
+                                det = "Defect";
+                            }
                             break;
                         }
                     }
                 }
                 step["aiDetection"] = det;
                 step["isFirstStep"] = (data.value("pair_index", -1) == 0);
+                if (!sub.empty()) step["phase"] = sub;
                 steps.push_back(step);
             } catch (...) {}
         }
     }
+
+    std::sort(steps.begin(), steps.end(), [](const json& a, const json& b) {
+        return a.value("pairIndex", 0) < b.value("pairIndex", 0);
+    });
 
     result["steps"] = steps;
     result["stepCount"] = steps.size();
