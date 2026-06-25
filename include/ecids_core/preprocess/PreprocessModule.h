@@ -72,6 +72,7 @@ private:
     void ai_test_loop_();
     void process_pair_(const DataBundle& left, const DataBundle& right, double working_distance_mm = 0.0);
     void process_file_(const std::string& filepath);
+    void process_pair_file_(const std::string& left_path, const std::string& right_path);
     void on_ai_result_(const DetectionResponse& response);
 
     std::string current_subfolder_() const;

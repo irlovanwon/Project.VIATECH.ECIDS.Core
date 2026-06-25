@@ -198,6 +198,7 @@ void PreprocessModule::ai_test_loop_() {
         return;
     }
 
+    // Scan all image files
     std::vector<std::string> files;
     for (auto& entry : fs::directory_iterator(test_data_path_)) {
         if (!entry.is_regular_file()) continue;
@@ -208,19 +209,134 @@ void PreprocessModule::ai_test_loop_() {
         }
     }
 
-    std::sort(files.begin(), files.end());
-    Logger::info("PreprocessModule: found " + std::to_string(files.size()) + " images");
+    // Try to pair files by naming convention: <prefix>_<index>.ext
+    // e.g. 1_5.bmp (left) pairs with 2_5.bmp (right)
+    std::map<std::string, std::pair<std::string, std::string>> pairs;
+    std::map<std::string, bool> used;
+    std::vector<std::string> unpaired;
 
-    for (const auto& filepath : files) {
-        if (!running_) break;
-        process_file_(filepath);
-        usleep(500000);
+    for (const auto& f : files) {
+        std::string stem = fs::path(f).stem().string();
+        size_t us = stem.find('_');
+        if (us != std::string::npos && us > 0) {
+            std::string prefix = stem.substr(0, us);
+            std::string suffix = stem.substr(us + 1);
+            if (prefix == "1" || prefix == "L" || prefix == "l" || prefix == "left") {
+                if (pairs.find(suffix) == pairs.end())
+                    pairs[suffix] = {"", ""};
+                pairs[suffix].first = f;
+                used[f] = true;
+            } else if (prefix == "2" || prefix == "R" || prefix == "r" || prefix == "right") {
+                if (pairs.find(suffix) == pairs.end())
+                    pairs[suffix] = {"", ""};
+                pairs[suffix].second = f;
+                used[f] = true;
+            }
+        }
     }
 
-    Logger::info("PreprocessModule: AI test image iteration complete");
+    // Files not matching the pairing convention
+    for (const auto& f : files) {
+        if (!used.count(f)) unpaired.push_back(f);
+    }
+
+    // Build sorted pair list
+    struct PairEntry {
+        std::string left;
+        std::string right;
+    };
+    std::vector<PairEntry> entries;
+
+    for (const auto& [key, lr] : pairs) {
+        if (!lr.first.empty() || !lr.second.empty()) {
+            entries.push_back({lr.first, lr.second});
+        }
+    }
+    std::sort(entries.begin(), entries.end(), [](const PairEntry& a, const PairEntry& b) {
+        std::string ak = fs::path(a.left.empty() ? a.right : a.left).stem().string();
+        std::string bk = fs::path(b.left.empty() ? b.right : b.left).stem().string();
+        return ak < bk;
+    });
+    for (const auto& f : unpaired) {
+        entries.push_back({f, ""});
+    }
+    std::sort(unpaired.begin(), unpaired.end());
+
+    Logger::info("PreprocessModule: found " + std::to_string(entries.size()) + " image pairs");
+
+    int processed = 0;
+    for (const auto& e : entries) {
+        if (!running_) break;
+        process_pair_file_(e.left, e.right);
+        usleep(500000);
+        ++processed;
+    }
+
+    Logger::info("PreprocessModule: AI test complete — processed " + std::to_string(processed) + " pairs");
 
     if (completion_callback_) {
         completion_callback_();
+    }
+}
+
+void PreprocessModule::process_pair_file_(const std::string& left_path,
+                                           const std::string& right_path) {
+    int idx = pair_index_.fetch_add(1);
+    std::string ts = Timestamp::now_string();
+
+    // Read left image
+    std::vector<uint8_t> l_jpeg;
+    if (!left_path.empty()) {
+        cv::Mat img = cv::imread(left_path);
+        if (img.empty()) {
+            Logger::error("PreprocessModule: failed to read image: " + left_path);
+            return;
+        }
+        cv::imencode(".jpg", img, l_jpeg, {cv::IMWRITE_JPEG_QUALITY, 95});
+    }
+
+    // Read right image
+    std::vector<uint8_t> r_jpeg;
+    if (!right_path.empty()) {
+        cv::Mat img = cv::imread(right_path);
+        if (!img.empty()) {
+            cv::imencode(".jpg", img, r_jpeg, {cv::IMWRITE_JPEG_QUALITY, 95});
+        }
+    }
+
+    // Send to AI dealer
+    if (ai_mode_ == AIMode::Binary && dealer_) {
+        dealer_->send_binary_request(ts,
+            l_jpeg.empty() ? nullptr : l_jpeg.data(),
+            l_jpeg.size(),
+            r_jpeg.empty() ? nullptr : r_jpeg.data(),
+            r_jpeg.size());
+    } else if (dealer_) {
+        std::vector<std::string> paths, names;
+        if (!left_path.empty()) {
+            paths.push_back(left_path);
+            names.push_back(fs::path(left_path).filename().string());
+        }
+        if (!right_path.empty()) {
+            paths.push_back(right_path);
+            names.push_back(fs::path(right_path).filename().string());
+        }
+        dealer_->send_file_request(ts, paths, names);
+    }
+
+    // Store in pending_
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        DataBundle left_bundle, right_bundle;
+        if (!l_jpeg.empty()) {
+            left_bundle.header.channel = "ai_test";
+            left_bundle.data = std::make_shared<std::vector<uint8_t>>(std::move(l_jpeg));
+        }
+        if (!r_jpeg.empty()) {
+            right_bundle.header.channel = "ai_test";
+            right_bundle.data = std::make_shared<std::vector<uint8_t>>(std::move(r_jpeg));
+        }
+        pending_[ts] = {ts, left_bundle, right_bundle, idx, InspectionSubTask::None, 0.0};
     }
 }
 

@@ -208,8 +208,10 @@ static json read_record_details(const std::string& db_root,
 
     json steps = json::array();
     std::string insp_dir = full + "/inspection";
+    bool is_ai_record = fs::path(full).filename().string().rfind("(AI Test)", 0) == 0;
+    std::string scan_dir = is_ai_record ? full : insp_dir;
 
-    if (fs::exists(insp_dir)) {
+    if (fs::exists(scan_dir)) {
         std::vector<fs::path> jfiles;
         for (auto& f : fs::directory_iterator(insp_dir)) {
             if (f.is_regular_file() && f.path().extension() == ".json") {
