@@ -213,7 +213,7 @@ static json read_record_details(const std::string& db_root,
 
     if (fs::exists(scan_dir)) {
         std::vector<fs::path> jfiles;
-        for (auto& f : fs::directory_iterator(insp_dir)) {
+        for (auto& f : fs::directory_iterator(scan_dir)) {
             if (f.is_regular_file() && f.path().extension() == ".json") {
                 std::string fn = f.path().filename().string();
                 if (fn.rfind("Stereo_", 0) == 0) jfiles.push_back(f.path());
