@@ -52,6 +52,7 @@ void PreprocessModule::set_result_callback(ResultCallback cb) {
 
 void PreprocessModule::start_inspection(const std::string& record_path) {
     if (thread_.joinable()) thread_.join();
+    clear_pending();
     active_record_path_ = record_path;
     ai_test_mode_ = false;
     pair_index_ = 0;
@@ -85,6 +86,7 @@ std::string PreprocessModule::current_subfolder_() const {
 
 void PreprocessModule::start_ai_test(const std::string& test_data_path, const std::string& record_path) {
     if (thread_.joinable()) thread_.join();
+    clear_pending();
     test_data_path_ = test_data_path;
     active_record_path_ = record_path;
     ai_test_mode_ = true;
