@@ -309,30 +309,22 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
 }
 
 void PreprocessModule::process_file_(const std::string& filepath) {
-    std::vector<uint8_t> file_data;
-    std::ifstream ifs(filepath, std::ios::binary);
-    if (!ifs) return;
-    ifs.seekg(0, std::ios::end);
-    size_t sz = ifs.tellg();
-    ifs.seekg(0);
-    file_data.resize(sz);
-    ifs.read(reinterpret_cast<char*>(file_data.data()), sz);
-
     int idx = pair_index_.fetch_add(1);
     std::string ts = Timestamp::now_string();
     std::string filename = fs::path(filepath).filename().string();
 
+    cv::Mat img = cv::imread(filepath);
+    if (img.empty()) {
+        Logger::error("PreprocessModule: failed to read image: " + filepath);
+        return;
+    }
+    std::vector<uint8_t> jpeg;
+    cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95});
+
     if (ai_mode_ == AIMode::Binary && dealer_) {
-        cv::Mat img = cv::imread(filepath);
-        if (!img.empty()) {
-            std::vector<uint8_t> jpeg;
-            cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 95});
-            dealer_->send_binary_request(ts,
-                jpeg.data(), jpeg.size(),
-                nullptr, 0);
-        } else {
-            Logger::error("PreprocessModule: failed to read image: " + filepath);
-        }
+        dealer_->send_binary_request(ts,
+            jpeg.data(), jpeg.size(),
+            nullptr, 0);
     } else if (dealer_) {
         dealer_->send_file_request(ts, {filepath}, {filename});
     }
@@ -341,8 +333,8 @@ void PreprocessModule::process_file_(const std::string& filepath) {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         DataBundle bundle;
         bundle.header.channel = "ai_test";
-        bundle.data = std::make_shared<std::vector<uint8_t>>(std::move(file_data));
-            pending_[ts] = {ts, bundle, DataBundle{}, idx, InspectionSubTask::None, 0.0};
+        bundle.data = std::make_shared<std::vector<uint8_t>>(std::move(jpeg));
+        pending_[ts] = {ts, bundle, DataBundle{}, idx, InspectionSubTask::None, 0.0};
     }
 }
 
@@ -380,12 +372,12 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
         std::string subfolder = (sub == InspectionSubTask::Installation) ? "installation" : "inspection";
         if (ai_test_mode_.load()) subfolder = "";
 
-        if (sub == InspectionSubTask::Installation && !left.data->empty()) {
+        if (!left.data->empty()) {
             record_mgr_->save_image(
                 active_record_path_, subfolder, "L", pidx,
                 left.data->data(), left.data->size());
         }
-        if (sub == InspectionSubTask::Installation && !right.data->empty()) {
+        if (!right.data->empty()) {
             record_mgr_->save_image(
                 active_record_path_, subfolder, "R", pidx,
                 right.data->data(), right.data->size());
