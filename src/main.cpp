@@ -307,6 +307,24 @@ static json read_record_details(const std::string& db_root,
     return result;
 }
 
+
+static std::string base64_encode(const std::string& data) {
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, valb = -6;
+    for (uint8_t c : data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(tbl[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) out.push_back(tbl[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
 int main(int argc, char* argv[]) {
     std::string config_path = "config/default.json";
     for (int i = 1; i < argc; ++i) {
@@ -637,6 +655,42 @@ int main(int argc, char* argv[]) {
             data["records"] = records;
             data["count"] = records.size();
             return make_response(0, "Success", data.dump());
+        }
+
+        
+        if (method == "POST" && path == "/GetImage") {
+            try {
+                json req = json::parse(body);
+                std::string rec_path = req.value("record_path", "");
+                std::string filename = req.value("filename", "");
+                std::string phase = req.value("phase", "");
+
+                if (rec_path.empty() || filename.empty()) {
+                    return make_response(4, "record_path and filename are required");
+                }
+
+                std::string full = db.root_path();
+                if (!rec_path.empty() && rec_path[0] != '/') full += "/";
+                full += rec_path;
+                if (!phase.empty()) full += "/" + phase;
+                full += "/" + filename;
+
+                std::ifstream ifs(full, std::ios::binary);
+                if (!ifs.is_open()) {
+                    return make_response(2, "Image not found: " + filename);
+                }
+                std::string data((std::istreambuf_iterator<char>(ifs)),
+                                 std::istreambuf_iterator<char>());
+                ifs.close();
+
+                std::string b64 = base64_encode(data);
+                json result;
+                result["image"] = b64;
+                result["size"] = data.size();
+                return make_response(0, "Success", result.dump());
+            } catch (const std::exception& e) {
+                return make_response(1, e.what());
+            }
         }
 
         if (method == "POST" && path == "/GetRecord") {
