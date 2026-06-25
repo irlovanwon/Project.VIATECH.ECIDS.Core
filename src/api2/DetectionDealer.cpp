@@ -204,6 +204,12 @@ void DetectionDealer::poll_loop_() {
             } else if (parts.size() > 1) {
                 std::string body_str(parts[1].begin(), parts[1].end());
                 json body = json::parse(body_str);
+                // Check for service restart notification from AIVD
+                if (body.contains("Type") && body["Type"] == "Reconnect") {
+                    Logger::info("DetectionDealer: AIVD reconnect notification received");
+                    if (reconnect_cb_) reconnect_cb_();
+                    continue;
+                }
                 if (body.contains("TransactionID"))
                     dr.transaction_id = body.value("TransactionID", dr.transaction_id);
                 if (body.contains("Result") && body["Result"].is_array()) {

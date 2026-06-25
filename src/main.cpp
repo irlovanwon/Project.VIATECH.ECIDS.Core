@@ -317,8 +317,17 @@ int main(int argc, char* argv[]) {
 
     std::thread([&ai_client]() {
         std::this_thread::sleep_for(std::chrono::seconds(2));
-        std::string resp = ai_client.send_command("Reconnect");
-        Logger::info("AIVD reconnect notification: " + resp);
+        for (int attempt = 1; attempt <= 3; ++attempt) {
+            std::string resp = ai_client.send_command("Reconnect");
+            Logger::info("AIVD reconnect notification (attempt " + std::to_string(attempt) + "): " + resp);
+            // Check if response indicates success (Status=1)
+            if (resp.find("\"Status\":\"1\"") != std::string::npos) {
+                break;
+            }
+            if (attempt < 3) {
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+            }
+        }
     }).detach();
 
     WSSServer wss_server;
@@ -410,6 +419,12 @@ int main(int argc, char* argv[]) {
     PreprocessModule preprocess;
     preprocess.init(&buffer, &dealer, &db.records(), ai_mode);
     preprocess.set_installation_fps(cfg.get_double("preprocess.installation_fps", 1.0));
+
+    // When AIVD restarts, clear pending requests to prevent stale matching
+    dealer.set_reconnect_callback([&preprocess]() {
+        Logger::info("AIVD reconnected — clearing Core pending state");
+        preprocess.clear_pending();
+    });
 
     TaskManager task_mgr;
 

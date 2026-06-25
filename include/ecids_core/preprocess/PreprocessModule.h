@@ -66,6 +66,7 @@ public:
     void stop_ai_test();
 
     void stop();
+    void clear_pending();
 
 private:
     void inspection_loop_();

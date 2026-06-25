@@ -21,6 +21,7 @@ namespace ecids_core {
 class DetectionDealer {
 public:
     using ResultCallback = std::function<void(const DetectionResponse&)>;
+    using ReconnectCallback = std::function<void()>;
 
     DetectionDealer();
     ~DetectionDealer();
@@ -43,6 +44,7 @@ public:
     bool is_running() const { return running_; }
 
     void set_result_callback(ResultCallback cb) { callback_ = std::move(cb); }
+    void set_reconnect_callback(ReconnectCallback cb) { reconnect_cb_ = std::move(cb); }
 
 private:
     void poll_loop_();
@@ -60,6 +62,7 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{false};
     ResultCallback callback_;
+    ReconnectCallback reconnect_cb_;
 };
 
 } // namespace ecids_core

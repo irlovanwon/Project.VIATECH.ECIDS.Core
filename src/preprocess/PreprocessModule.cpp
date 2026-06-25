@@ -106,6 +106,13 @@ void PreprocessModule::stop() {
     if (thread_.joinable()) thread_.join();
 }
 
+void PreprocessModule::clear_pending() {
+    std::lock_guard<std::mutex> lock(pending_mutex_);
+    size_t count = pending_.size();
+    pending_.clear();
+    Logger::info("PreprocessModule: cleared " + std::to_string(count) + " pending requests on AIVD reconnect");
+}
+
 static double calculate_working_distance(const uint8_t* depth_data, size_t depth_size) {
     if (!depth_data || depth_size < sizeof(float)) return 0.0;
     const float* floats = reinterpret_cast<const float*>(depth_data);
