@@ -45,7 +45,7 @@ using json = nlohmann::json;
 using namespace ecids_core;
 
 static std::atomic<bool> g_running{true};
-static std::atomic<bool> g_processing_paused{false};
+static std::atomic<bool> g_processing_paused{true};
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -446,7 +446,7 @@ int main(int argc, char* argv[]) {
             result_json["avg_working_distance_mm"] = std::round(avg_wd * 10.0) / 10.0;
 
             bool wd_ok = (avg_wd >= 300.0 && avg_wd <= 1000.0);
-            bool task_ok = !result.task_id.empty();
+            bool task_ok = (result.task_id == "T1" || result.task_id == "T2");
             result_json["installation_ready"] = (wd_ok && task_ok);
             result_json["working_distance_ok"] = wd_ok;
             result_json["task_detected"] = task_ok;
@@ -652,6 +652,10 @@ int main(int argc, char* argv[]) {
                     station, escalator, task);
                 db.records().set_active_record(record_path);
 
+                g_processing_paused.store(false);
+                sc_client.send_command("POST", "/StartCapture",
+                    R"({"camera_id":0,"types":["visual_geometric_2d","visual_geometric_3d","sensor_tracking"]})");
+
                 preprocess.start_inspection(record_path);
                 installation_wd_sum = 0.0;
                 installation_wd_count = 0;
@@ -669,6 +673,9 @@ int main(int argc, char* argv[]) {
             StatusTracker::instance().set_task_active(false);
             db.records().set_active_record("");
             ModeController::instance().set_mode(Mode::None);
+            g_processing_paused.store(true);
+            sc_client.send_command("POST", "/StopCapture",
+                R"({"camera_id":0,"types":["visual_geometric_2d","visual_geometric_3d","sensor_tracking"]})");
             return make_response(0, "Inspection stopped");
         }
 

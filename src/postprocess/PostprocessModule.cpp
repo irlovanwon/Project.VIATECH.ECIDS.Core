@@ -42,6 +42,8 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
     auto extracted = extractor_.extract(response.results, min_confidence_);
     if (!extracted.task_id.empty()) {
         result.task_id = extracted.task_id;
+    } else {
+        result.task_id = "Unknown";
     }
 
     for (const auto& det : response.results) {
