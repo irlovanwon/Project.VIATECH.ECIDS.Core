@@ -125,7 +125,6 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
         json result_json;
         result_json["record_id"] = record_mgr_->active_record();
         result_json["pair_index"] = pair_index;
-        result_json["camera_id"] = "L";
         result_json["timestamp"] = result.timestamp;
         result_json["task_id"] = result.task_id;
         result_json["station_id"] = result.station_id;
@@ -147,7 +146,7 @@ InspectionResult PostprocessModule::process(const DetectionResponse& response,
         }
 
         record_mgr_->save_stereo_result(record_mgr_->active_record(),
-                                        subfolder, "L", pair_index, result_json.dump());
+                                        subfolder, "", pair_index, result_json.dump());
     }
 
     return result;
@@ -178,7 +177,7 @@ InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& res
         result_json["detections"] = dets;
 
         record_mgr_->save_stereo_result(record_mgr_->active_record(),
-                                        "", "L", pair_index, result_json.dump());
+                                        "", "", pair_index, result_json.dump());
     }
 
     return result;

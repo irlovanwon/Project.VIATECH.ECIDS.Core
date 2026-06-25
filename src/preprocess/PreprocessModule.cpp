@@ -149,8 +149,18 @@ void PreprocessModule::inspection_loop_() {
         }
 
         if (frame.data->empty()) continue;
-        DataBundle left = frame;
-        DataBundle right;
+
+        DataBundle left, right;
+        const auto& raw = *frame.data;
+        if (raw.size() == 1920 * 2400 * 4) {
+            size_t half = raw.size() / 2;
+            left.data = std::make_shared<std::vector<uint8_t>>(raw.begin(), raw.begin() + half);
+            right.data = std::make_shared<std::vector<uint8_t>>(raw.begin() + half, raw.end());
+            left.header = frame.header;
+            right.header = frame.header;
+        } else {
+            left = frame;
+        }
 
         auto sub = sub_task_.load();
 
@@ -235,6 +245,10 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
     std::string subfolder = current_subfolder_();
 
     std::vector<uint8_t> l_enc = encode_jpeg_(left.data->data(), left.data->size(), 95);
+    std::vector<uint8_t> r_enc;
+    if (!right.data->empty()) {
+        r_enc = encode_jpeg_(right.data->data(), right.data->size(), 95);
+    }
 
     bool is_gap = (sub_task_.load() == InspectionSubTask::GapInspection ||
                    sub_task_.load() == InspectionSubTask::Marking);
@@ -242,8 +256,8 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
     if (ai_mode_ == AIMode::Binary && dealer_) {
         dealer_->send_binary_request(ts,
             l_enc.data(), l_enc.size(),
-            right.data->empty() ? nullptr : right.data->data(),
-            right.data->size());
+            r_enc.empty() ? nullptr : r_enc.data(),
+            r_enc.size());
     } else if (dealer_) {
         if (!active_record_path_.empty() && record_mgr_) {
             std::string lfile = record_mgr_->save_image(
@@ -252,8 +266,7 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
             std::vector<std::string> uris = {active_record_path_ + "/" + subfolder + "/" + lfile};
             std::vector<std::string> fns = {lfile};
 
-            if (!right.data->empty()) {
-                std::vector<uint8_t> r_enc = encode_jpeg_(right.data->data(), right.data->size(), 95);
+            if (!r_enc.empty()) {
                 std::string rfile = record_mgr_->save_image(
                     active_record_path_, subfolder, "R", idx,
                     r_enc.data(), r_enc.size());
@@ -268,17 +281,25 @@ void PreprocessModule::process_pair_(const DataBundle& left, const DataBundle& r
         record_mgr_->save_image(
             active_record_path_, subfolder, "L", idx,
             l_enc.data(), l_enc.size());
+        if (!r_enc.empty()) {
+            record_mgr_->save_image(
+                active_record_path_, subfolder, "R", idx,
+                r_enc.data(), r_enc.size());
+        }
     }
 
-    DataBundle left_store;
+    DataBundle left_store, right_store;
     if (!is_gap) {
         left_store.data = std::make_shared<std::vector<uint8_t>>(std::move(l_enc));
+        if (!r_enc.empty()) {
+            right_store.data = std::make_shared<std::vector<uint8_t>>(std::move(r_enc));
+        }
     }
 
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
         if (pending_.size() > 200) pending_.clear();
-        pending_[ts] = {ts, left_store, DataBundle{}, idx, sub_task_.load(), working_distance_mm};
+        pending_[ts] = {ts, left_store, right_store, idx, sub_task_.load(), working_distance_mm};
     }
 }
 
@@ -348,6 +369,11 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
                 active_record_path_, subfolder, "L", pidx,
                 left.data->data(), left.data->size());
         }
+        if (sub == InspectionSubTask::Installation && !right.data->empty()) {
+            record_mgr_->save_image(
+                active_record_path_, subfolder, "R", pidx,
+                right.data->data(), right.data->size());
+        }
 
         std::string ai_json_str;
         {
@@ -368,8 +394,10 @@ void PreprocessModule::on_ai_result_(const DetectionResponse& response) {
 
         if (subfolder.empty()) {
             record_mgr_->save_ai_result(active_record_path_, "", "L", pidx, ai_json_str);
+            record_mgr_->save_ai_result(active_record_path_, "", "R", pidx, ai_json_str);
         } else {
             record_mgr_->save_ai_result(active_record_path_, subfolder, "L", pidx, ai_json_str);
+            record_mgr_->save_ai_result(active_record_path_, subfolder, "R", pidx, ai_json_str);
         }
     }
 

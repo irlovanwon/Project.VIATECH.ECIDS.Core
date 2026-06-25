@@ -306,7 +306,8 @@ int main(int argc, char* argv[]) {
                 buffer.enqueue_inspection(bundle);
             }
 
-            if (bundle.header.part.empty() || bundle.header.part == "left") {
+            if (bundle.header.part.empty() || bundle.header.part == "left" ||
+                bundle.header.part == "stereo_image") {
                 static auto last_live_ts = std::chrono::steady_clock::now();
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -317,12 +318,14 @@ int main(int argc, char* argv[]) {
                         int w = 1920;
                         int h = static_cast<int>(raw.size() / (1920u * 4));
                         if (h > 0 && static_cast<size_t>(w) * h * 4 == raw.size()) {
-                            cv::Mat img(h, w, CV_8UC4, const_cast<uint8_t*>(raw.data()));
+                            cv::Mat full(h, w, CV_8UC4, const_cast<uint8_t*>(raw.data()));
+                            int crop_h = (h >= 2400) ? h / 2 : h;
+                            cv::Mat img = full(cv::Rect(0, 0, w, crop_h));
                             std::vector<uint8_t> jpeg;
                             cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 70});
                             if (!jpeg.empty()) {
                                 wss_server.broadcast_binary("core/live_image",
-                                    jpeg.data(), jpeg.size());
+                                    jpeg.data(), jpeg.size(), R"({"camera":"L"})");
                             }
                         }
                     }
@@ -475,6 +478,23 @@ int main(int argc, char* argv[]) {
 
         publisher.publish_json("Visual2D", result_json.dump());
         wss_server.broadcast_json("core/result", result_json.dump());
+
+        if (!left.data->empty()) {
+            json lhdr;
+            lhdr["camera"] = "L";
+            lhdr["pair_index"] = pair_index;
+            lhdr["transaction_id"] = result.transaction_id;
+            wss_server.broadcast_binary("core/result_image",
+                left.data->data(), left.data->size(), lhdr.dump());
+        }
+        if (!right.data->empty()) {
+            json rhdr;
+            rhdr["camera"] = "R";
+            rhdr["pair_index"] = pair_index;
+            rhdr["transaction_id"] = result.transaction_id;
+            wss_server.broadcast_binary("core/result_image",
+                right.data->data(), right.data->size(), rhdr.dump());
+        }
 
         Logger::info("Result published: txn=" + result.transaction_id
                      + " gap=" + std::to_string(result.gap_distance_mm) + "mm"

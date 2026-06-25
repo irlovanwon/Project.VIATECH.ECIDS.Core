@@ -17,6 +17,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <poll.h>
 
 #include <nlohmann/json.hpp>
 #include <cstring>
@@ -144,7 +145,7 @@ void WSSServer::accept_loop_() {
     while (running_) {
         struct sockaddr_in caddr{};
         socklen_t clen = sizeof(caddr);
-        int fd = accept4(listen_fd_, (struct sockaddr*)&caddr, &clen, SOCK_NONBLOCK);
+        int fd = accept4(listen_fd_, (struct sockaddr*)&caddr, &clen, 0);
         if (fd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 usleep(200000);
@@ -374,6 +375,14 @@ void WSSServer::client_loop_(int fd, void* ssl_void) {
     if (!conn) return;
 
     while (running_ && conn->alive) {
+        struct pollfd pfd;
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int rc = poll(&pfd, 1, 1000);
+        if (rc <= 0) continue;
+        if (!(pfd.revents & (POLLIN | POLLHUP | POLLERR))) continue;
+
         std::string msg = recv_ws_text_(ssl);
         if (msg.empty()) break;
 
@@ -435,6 +444,18 @@ void WSSServer::broadcast_binary(const std::string& topic,
                                  const uint8_t* data, size_t size,
                                  const std::string& header_json) {
     std::lock_guard<std::mutex> lock(clients_mutex_);
+
+    std::vector<uint8_t> payload;
+    if (!header_json.empty()) {
+        uint16_t hdr_len = static_cast<uint16_t>(header_json.size());
+        payload.push_back(static_cast<uint8_t>(hdr_len >> 8));
+        payload.push_back(static_cast<uint8_t>(hdr_len & 0xFF));
+        payload.insert(payload.end(), header_json.begin(), header_json.end());
+    }
+    if (data && size > 0) {
+        payload.insert(payload.end(), data, data + size);
+    }
+
     for (auto* conn : clients_) {
         if (!conn->alive || !conn->ssl) continue;
         bool subscribed = false;
@@ -444,9 +465,8 @@ void WSSServer::broadcast_binary(const std::string& topic,
         if (!subscribed) continue;
 
         std::lock_guard<std::mutex> wlock(conn->write_mutex);
-        send_ws_binary_(conn->ssl, data, size);
+        send_ws_binary_(conn->ssl, payload.data(), payload.size());
     }
-    (void)header_json;
 }
 
 } // namespace ecids_core

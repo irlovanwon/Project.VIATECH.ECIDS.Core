@@ -105,7 +105,8 @@ void RecordManager::save_stereo_result(const std::string& record_path,
                                        const std::string& camera_id,
                                        int pair_index,
                                        const std::string& json_str) {
-    std::string filename = "Stereo_" + camera_id + "_" + format_pair_index_(pair_index) + ".json";
+    (void)camera_id;
+    std::string filename = "Stereo_" + format_pair_index_(pair_index) + ".json";
     std::string dir = record_path + "/" + subfolder;
     ensure_dir_(dir);
     write_text_(dir + "/" + filename, json_str);
