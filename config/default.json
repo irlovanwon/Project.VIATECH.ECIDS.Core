@@ -26,7 +26,7 @@
         "sub_endpoint_local": "ipc:///tmp/core_detection_result",
         "sub_endpoint_remote": "tcp://localhost:5556",
         "identity": "ecids_core",
-        "sndhwm": 10,
+        "sndhwm": 200,
         "rcvhwm": 10,
         "poll_timeout_ms": 100,
         "ai_mode": "binary"
@@ -55,7 +55,7 @@
             "Visual3D": "ipc:///tmp/core_pub_visual3d",
             "Sensor": "ipc:///tmp/core_pub_sensor"
         },
-        "sndhwm": 10
+        "sndhwm": 200
     },
 
     "api3c": {
