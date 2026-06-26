@@ -276,12 +276,12 @@ InspectionResult PostprocessModule::process_ai_test(const DetectionResponse& res
                     "AL", pair_index, ann.data(), ann.size());
             }
         }
+        // Right image: save raw only (no annotation)
+        // AI detections are from the left image perspective — drawing them
+        // on the right image produces incorrect overlays.
         if (right_data && right_size > 0) {
-            auto ann = annotate_image_(right_data, right_size, result);
-            if (!ann.empty()) {
-                record_mgr_->save_image(record_mgr_->active_record(), "",
-                    "AR", pair_index, ann.data(), ann.size());
-            }
+            record_mgr_->save_image(record_mgr_->active_record(), "",
+                "R", pair_index, right_data, right_size);
         }
     }
 
