@@ -20,6 +20,7 @@
 #include "ecids_core/api2/AIAdminClient.h"
 #include "ecids_core/api3/ClientServer.h"
 #include "ecids_core/api3/DataPublisher.h"
+#include "ecids_core/data/ImageEncoder.h"
 #include "ecids_core/api3/WSSServer.h"
 #include "ecids_core/preprocess/PreprocessModule.h"
 #include "ecids_core/postprocess/PostprocessModule.h"
@@ -401,6 +402,21 @@ int main(int argc, char* argv[]) {
 
     WSSServer wss_server;
 
+    // SPSC image encoder — dedicated thread for WebP (WSS) + JPG (ZMQ) encoding
+    ImageEncoder encoder;
+    encoder.set_callback([&wss_server, &publisher](const EncodeResult& result) {
+        if (!result.webp_data.empty()) {
+            wss_server.broadcast_binary(result.topic,
+                result.webp_data.data(), result.webp_data.size(),
+                result.header_json);
+        }
+        if (!result.jpg_data.empty()) {
+            publisher.publish_binary("Visual2D", result.header_json,
+                result.jpg_data.data(), result.jpg_data.size());
+        }
+    });
+    encoder.start();
+
     DataSubscriber subscriber;
     if (cfg_json.contains("api1a") && cfg_json["api1a"].contains("channels")) {
         for (auto& [name, endpoint] : cfg_json["api1a"]["channels"].items()) {
@@ -429,15 +445,13 @@ int main(int argc, char* argv[]) {
                         int w = 1920;
                         int h = static_cast<int>(raw.size() / (1920u * 4));
                         if (h > 0 && static_cast<size_t>(w) * h * 4 == raw.size()) {
-                            cv::Mat full(h, w, CV_8UC4, const_cast<uint8_t*>(raw.data()));
                             int crop_h = (h >= 2400) ? h / 2 : h;
-                            cv::Mat img = full(cv::Rect(0, 0, w, crop_h));
-                            std::vector<uint8_t> jpeg;
-                            cv::imencode(".jpg", img, jpeg, {cv::IMWRITE_JPEG_QUALITY, 70});
-                            if (!jpeg.empty()) {
-                                wss_server.broadcast_binary("core/live_image",
-                                    jpeg.data(), jpeg.size(), R"({"camera":"L"})");
-                            }
+                            // Enqueue raw frame to SPSC encoder thread
+                            // Encoder produces WebP for WSS + JPG for ZMQ
+                            encoder.enqueue(raw.data(), (size_t)w * crop_h * 4,
+                                            w, crop_h,
+                                            "core/live_image",
+                                            R"({"camera":"L"})");
                         }
                     }
                 }
@@ -1002,6 +1016,7 @@ int main(int argc, char* argv[]) {
     preprocess.stop();
     subscriber.stop();
     dealer.stop();
+    encoder.stop();
     publisher.stop();
     wss_server.stop();
     client_server.stop();
