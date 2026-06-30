@@ -17,6 +17,32 @@ KEY_PATH="${KEY_PATH:-${PROJECT_DIR}/certs/server.key}"
 
 mkdir -p "${LOG_DIR}"
 
+kill_all_instances() {
+    local pids
+    pids=$(pgrep -f "${APP_NAME}" 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo "[Core] Stopping all instances: $pids"
+        for pid in $pids; do
+            kill -TERM "$pid" 2>/dev/null || true
+        done
+        local count=0
+        while pgrep -f "${APP_NAME}" > /dev/null 2>&1; do
+            sleep 0.5
+            count=$((count + 1))
+            if [ $count -ge 20 ]; then
+                echo "[Core] Force-killing survivors..."
+                pids=$(pgrep -f "${APP_NAME}" 2>/dev/null)
+                for pid in $pids; do
+                    kill -9 "$pid" 2>/dev/null || true
+                done
+                break
+            fi
+        done
+        echo "[Core] All instances stopped."
+    fi
+    rm -f "${PID_FILE}"
+}
+
 is_running() {
     if [ -f "${PID_FILE}" ]; then
         local pid
@@ -38,10 +64,9 @@ do_build() {
 }
 
 do_start() {
-    if is_running; then
-        echo "[Core] Already running (PID: $(cat "${PID_FILE}"))"
-        return 0
-    fi
+    # Kill any existing instances first (prevents duplicates from manual starts)
+    kill_all_instances
+    sleep 0.5
 
     if [ ! -f "${BUILD_DIR}/${APP_NAME}" ]; then
         do_build
@@ -64,30 +89,7 @@ do_start() {
 }
 
 do_stop() {
-    if ! is_running; then
-        echo "[Core] Not running."
-        rm -f "${PID_FILE}"
-        return 0
-    fi
-
-    local pid
-    pid=$(cat "${PID_FILE}")
-    echo "[Core] Stopping (PID: ${pid})..."
-    kill -TERM "${pid}" 2>/dev/null || true
-
-    local count=0
-    while kill -0 "${pid}" 2>/dev/null; do
-        sleep 0.5
-        count=$((count + 1))
-        if [ ${count} -ge 20 ]; then
-            echo "[Core] Force killing..."
-            kill -9 "${pid}" 2>/dev/null || true
-            break
-        fi
-    done
-
-    rm -f "${PID_FILE}"
-    echo "[Core] Stopped."
+    kill_all_instances
 }
 
 do_status() {
@@ -101,7 +103,7 @@ do_status() {
 case "${1:-}" in
     start)   do_start ;;
     stop)    do_stop ;;
-    restart) do_stop; do_start ;;
+    restart) do_stop; sleep 1; do_start ;;
     status)  do_status ;;
     build)   do_build ;;
     *)
