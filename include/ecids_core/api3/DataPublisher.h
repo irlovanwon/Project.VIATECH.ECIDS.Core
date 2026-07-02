@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: API3b ZMQ PUB - data publishing
+ * Des: API3b ZMQ PUB - data publishing with ZMQ_IMMEDIATE + zero-copy
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented 3-channel PUB (result, status, data)
+ * Modification: 2026-07-02 Added ZMQ_IMMEDIATE=1, true zero-copy (zmq_msg_init_data)
  */
 
 #ifndef ECIDS_CORE_API3_DATAPUBLISHER_H

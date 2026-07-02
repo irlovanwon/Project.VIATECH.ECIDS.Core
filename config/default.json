@@ -64,7 +64,8 @@
         "cert_path": "certs/server.crt",
         "key_path": "certs/server.key",
         "thread_strategy": "one_loop_per_thread",
-        "worker_threads": 2
+        "worker_threads": 2,
+        "jpeg_quality": 85
     },
 
     "preprocess": {
@@ -73,14 +74,22 @@
         "image_quality": 95,
         "spsc_capacity": 100,
         "processing_paused": false,
-        "installation_fps": 1
+        "installation_fps": 1,
+        "ai_test_fps": 10
     },
 
     "postprocess": {
-        "edge_fitting_method": "least_squares",
-        "disparity_method": "locally_weighted",
+        "edge_fitting_method": "hybrid_ransac",
+        "disparity_method": "global_shift",
         "min_confidence": 0.5,
-        "spsc_capacity": 100
+        "spsc_capacity": 100,
+        "gap_filter_margin": 0.10,
+        "same_gap_enabled": true,
+        "same_gap_location_threshold": 30.0,
+        "same_gap_size_threshold": 0.3,
+        "edge_inlier_threshold": 5.0,
+        "depth_reference_mm": 0.0,
+        "offset_mm": 0.0
     },
 
     "database": {

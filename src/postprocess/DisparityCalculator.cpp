@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: DisparityCalculator implementation
+ * Des: DisparityCalculator — global shift matching + RANSAC fitting
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-07-02 Added global shift algorithm with 10 sets, RANSAC disparity fitting
  */
 
 #include "ecids_core/postprocess/DisparityCalculator.h"
@@ -93,6 +93,80 @@ double DisparityCalculator::calculate_disparity(const uint8_t* left_data, size_t
     return template_match_(left_img.data, left_img.cols, left_img.rows,
                            right_img.data, right_img.cols, right_img.rows,
                            px, py, window_radius);
+}
+
+std::vector<DisparitySet> DisparityCalculator::global_shift_disparity(
+    const std::vector<Point2D>& left_points,
+    const std::vector<Point2D>& right_points,
+    const uint8_t* left_data, size_t left_size,
+    const uint8_t* right_data, size_t right_size,
+    int window_radius) {
+
+    std::vector<DisparitySet> result;
+
+    if (left_points.empty() || right_points.empty()) return result;
+
+    std::vector<Point2D> L = left_points;
+    std::vector<Point2D> R = right_points;
+    std::sort(L.begin(), L.end(), [](const Point2D& a, const Point2D& b) { return a.x < b.x; });
+    std::sort(R.begin(), R.end(), [](const Point2D& a, const Point2D& b) { return a.x < b.x; });
+
+    int nL = static_cast<int>(L.size());
+    int nR = static_cast<int>(R.size());
+    int base_match = 0; // assume L[0] matches R[0] (shift=0)
+
+    for (int shift = -5; shift <= 5; ++shift) {
+        if (shift == 0) continue;
+
+        DisparitySet ds;
+        ds.shift = shift;
+
+        for (int i = 0; i < nL; ++i) {
+            int j = i + shift + base_match;
+            if (j < 0 || j >= nR) continue;
+
+            double disp = calculate_disparity(left_data, left_size,
+                                              right_data, right_size,
+                                              L[i], window_radius);
+            if (disp > 0.1) {
+                ds.disparities.push_back(disp);
+            }
+        }
+
+        if (!ds.disparities.empty()) {
+            double sum = 0;
+            for (double d : ds.disparities) sum += d;
+            ds.average_disparity = sum / ds.disparities.size();
+            result.push_back(ds);
+        }
+    }
+
+    return result;
+}
+
+std::vector<double> DisparityCalculator::ransac_fit_disparity(const std::vector<double>& disparities,
+                                                                double inlier_threshold) {
+    if (disparities.size() < 3) return disparities;
+
+    double best_median = 0;
+    {
+        std::vector<double> sorted_disp = disparities;
+        std::sort(sorted_disp.begin(), sorted_disp.end());
+        best_median = sorted_disp[sorted_disp.size() / 2];
+    }
+
+    std::vector<double> fitted;
+    for (double d : disparities) {
+        if (std::abs(d - best_median) < inlier_threshold) {
+            fitted.push_back(d);
+        }
+    }
+
+    if (fitted.empty()) {
+        fitted.push_back(best_median);
+    }
+
+    return fitted;
 }
 
 double DisparityCalculator::calculate_distance(double disparity_px) const {

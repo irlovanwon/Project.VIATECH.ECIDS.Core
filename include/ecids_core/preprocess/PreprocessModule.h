@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Image to AI pipeline orchestration
  * Date: 2026-06-18
- * Modification: 2026-06-23 Inspection sub-tasks, working distance, new filename convention
+ * Modification: 2026-07-02 API2 raw bytes transfer, configurable AI test FPS, File mode for AI Test
  */
 
 #ifndef ECIDS_CORE_PREPROCESS_PREPROCESSMODULE_H
@@ -26,6 +26,7 @@ namespace ecids_core {
 class DataBuffer;
 class DetectionDealer;
 class RecordManager;
+class DatabaseWriter;
 
 class PreprocessModule {
 public:
@@ -57,6 +58,8 @@ public:
     void set_result_callback(ResultCallback cb);
     void set_completion_callback(CompletionCallback cb) { completion_callback_ = std::move(cb); }
     void set_installation_fps(double fps) { installation_fps_ = fps; }
+    void set_ai_test_fps(double fps) { ai_test_fps_ = fps; }
+    void set_db_writer(DatabaseWriter* writer) { db_writer_ = writer; }
 
     void start_inspection(const std::string& record_path);
     void stop_inspection();
@@ -83,10 +86,12 @@ private:
     DataBuffer* buffer_ = nullptr;
     DetectionDealer* dealer_ = nullptr;
     RecordManager* record_mgr_ = nullptr;
+    DatabaseWriter* db_writer_ = nullptr;
     AIMode ai_mode_ = AIMode::File;
     ResultCallback callback_;
     CompletionCallback completion_callback_;
     double installation_fps_ = 1.0;
+    double ai_test_fps_ = 10.0;
 
     std::thread thread_;
     std::atomic<bool> running_{false};

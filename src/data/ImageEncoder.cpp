@@ -1,15 +1,18 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: SPSC image encoder implementation
+ * Des: SPSC image encoder — JPG encoding via libjpeg-turbo for WSS
  * Date: 2026-06-26
+ * Modification: 2026-07-02 Switched to libjpeg-turbo TurboJPEG API, JPG-only for WSS
  */
 
 #include "ecids_core/data/ImageEncoder.h"
 #include "ecids_core/common/Logger.h"
 
-#include <opencv2/opencv.hpp>
+#include <turbojpeg.h>
 
 namespace ecids_core {
+
+ImageEncoder::ImageEncoder() {}
 
 ImageEncoder::~ImageEncoder() {
     stop();
@@ -19,7 +22,7 @@ void ImageEncoder::start() {
     if (running_.load()) return;
     running_.store(true);
     thread_ = std::thread(&ImageEncoder::encode_loop_, this);
-    Logger::info("ImageEncoder: started");
+    Logger::info("ImageEncoder: started (libjpeg-turbo, quality=" + std::to_string(quality_) + ")");
 }
 
 void ImageEncoder::stop() {
@@ -50,6 +53,29 @@ void ImageEncoder::enqueue(const uint8_t* data, size_t size, int width, int heig
     cv_.notify_one();
 }
 
+bool ImageEncoder::encode_jpeg_turbo_(const uint8_t* bgra, int w, int h,
+                                       std::vector<uint8_t>& out) {
+    tjhandle handle = tjInitCompress();
+    if (!handle) return false;
+
+    unsigned char* jpegBuf = nullptr;
+    unsigned long jpegSize = 0;
+
+    int rc = tjCompress2(handle, const_cast<uint8_t*>(bgra),
+                         w, 0, h, TJPF_BGRA,
+                         &jpegBuf, &jpegSize,
+                         TJSAMP_420, quality_, TJFLAG_FASTDCT);
+
+    if (rc == 0 && jpegBuf && jpegSize > 0) {
+        out.assign(jpegBuf, jpegBuf + jpegSize);
+    }
+
+    if (jpegBuf) tjFree(jpegBuf);
+    tjDestroy(handle);
+
+    return (rc == 0 && !out.empty());
+}
+
 void ImageEncoder::encode_loop_() {
     while (running_.load()) {
         EncodeRequest req;
@@ -64,27 +90,27 @@ void ImageEncoder::encode_loop_() {
             queue_.pop();
         }
 
-        EncodeResult result;
-        result.topic = req.topic;
-        result.header_json = req.header_json;
-
         int h = req.height;
         int w = req.width;
         if (w <= 0 || h <= 0) {
             if (req.raw_data.size() % 4 == 0) {
                 w = 1920;
-                h = (int)(req.raw_data.size() / (w * 4));
+                h = static_cast<int>(req.raw_data.size() / (static_cast<size_t>(w) * 4));
             }
         }
-        if (w <= 0 || h <= 0 || req.raw_data.size() < (size_t)(w * h * 4)) {
+        if (w <= 0 || h <= 0 ||
+            req.raw_data.size() < static_cast<size_t>(w) * h * 4) {
             continue;
         }
 
-        cv::Mat img(h, w, CV_8UC4, const_cast<uint8_t*>(req.raw_data.data()));
-        if (img.empty()) continue;
+        EncodeResult result;
+        result.topic = req.topic;
+        result.header_json = req.header_json;
 
-        cv::imencode(".webp", img, result.webp_data, {cv::IMWRITE_WEBP_QUALITY, 80});
-        cv::imencode(".jpg", img, result.jpg_data, {cv::IMWRITE_JPEG_QUALITY, 85});
+        if (!encode_jpeg_turbo_(req.raw_data.data(), w, h, result.jpg_data)) {
+            Logger::warn("ImageEncoder: tjCompress2 failed, skipping frame");
+            continue;
+        }
 
         if (callback_) callback_(result);
     }

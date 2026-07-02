@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: API2a DetectionDealer implementation (PUB/SUB)
+ * Des: API2a DetectionDealer (PUB/SUB) — ZMQ_IMMEDIATE + zero-copy
  * Date: 2026-06-18
- * Modification: 2026-06-23 Refactored DEALER→PUB+SUB, added zmq_msg_init_data zero-copy
+ * Modification: 2026-07-02 Added ZMQ_IMMEDIATE=1, true zero-copy via zmq_msg_init_data
  */
 
 #include "ecids_core/api2/DetectionDealer.h"
@@ -17,6 +17,10 @@
 namespace ecids_core {
 
 using json = nlohmann::json;
+
+static void zc_free_fn_(void* data, void* /*hint*/) {
+    delete[] static_cast<uint8_t*>(data);
+}
 
 DetectionDealer::DetectionDealer() {
     zmq_ctx_ = zmq_ctx_new();
@@ -47,6 +51,10 @@ void DetectionDealer::start() {
         return;
     }
     zmq_setsockopt(pub_sock_, ZMQ_SNDHWM, &sndhwm_, sizeof(sndhwm_));
+
+    int immediate = 1;
+    zmq_setsockopt(pub_sock_, ZMQ_IMMEDIATE, &immediate, sizeof(immediate));
+
     int linger = 100;
     zmq_setsockopt(pub_sock_, ZMQ_LINGER, &linger, sizeof(linger));
 
@@ -79,29 +87,16 @@ void DetectionDealer::start() {
 
     running_ = true;
     thread_ = std::thread(&DetectionDealer::poll_loop_, this);
-    Logger::info("DetectionDealer: PUB bind " + pub_endpoint_ + " SUB connect←" + sub_endpoint_);
+    Logger::info("DetectionDealer: PUB bind " + pub_endpoint_ + " (IMMEDIATE=1) SUB connect<" + sub_endpoint_);
 }
 
 void DetectionDealer::stop() {
     if (!running_) return;
     running_ = false;
     if (thread_.joinable()) thread_.join();
-    if (pub_sock_) {
-        zmq_close(pub_sock_);
-        pub_sock_ = nullptr;
-    }
-    if (sub_sock_) {
-        zmq_close(sub_sock_);
-        sub_sock_ = nullptr;
-    }
+    if (pub_sock_) { zmq_close(pub_sock_); pub_sock_ = nullptr; }
+    if (sub_sock_) { zmq_close(sub_sock_); sub_sock_ = nullptr; }
     Logger::info("DetectionDealer: stopped");
-}
-
-static void zmq_send_zero_copy(void* sock, const void* data, size_t size, int flags) {
-    zmq_msg_t msg;
-    zmq_msg_init_size(&msg, size);
-    memcpy(zmq_msg_data(&msg), data, size);
-    zmq_msg_send(&msg, sock, flags);
 }
 
 void DetectionDealer::send_file_request(const std::string& transaction_id,
@@ -127,7 +122,11 @@ void DetectionDealer::send_file_request(const std::string& transaction_id,
     req["Data"] = data_arr;
 
     std::string msg = req.dump();
-    zmq_send_zero_copy(pub_sock_, msg.c_str(), msg.size(), ZMQ_DONTWAIT);
+
+    zmq_msg_t zmsg;
+    zmq_msg_init_size(&zmsg, msg.size());
+    memcpy(zmq_msg_data(&zmsg), msg.data(), msg.size());
+    zmq_msg_send(&zmsg, pub_sock_, ZMQ_DONTWAIT);
 }
 
 void DetectionDealer::send_binary_request(const std::string& transaction_id,
@@ -141,17 +140,24 @@ void DetectionDealer::send_binary_request(const std::string& transaction_id,
     header["DealerID"] = identity_;
     header["Timestamp"] = Timestamp::now_string().substr(0, 15);
     header["ImageCount"] = 1;
+    header["Format"] = "BGRA";
     header["Parts"] = json::array({
-        json{{"Index", 0}, {"Part", "left"}, {"Resolution", "1920,1080"}, {"Format", "Mono"}, {"Size", left_size}}
+        json{{"Index", 0}, {"Part", "left"}, {"Resolution", "1920,1080"}, {"Format", "BGRA"}, {"Size", left_size}}
     });
     header["Data"] = json::array({
-        json{{"FileName", "L.jpg"}, {"Format", "Mono"}, {"Resolution", "1920,1080"}}
+        json{{"FileName", "L.bgra"}, {"Format", "BGRA"}, {"Resolution", "1920,1080"}}
     });
 
     std::string hdr = header.dump();
 
-    zmq_send_zero_copy(pub_sock_, hdr.c_str(), hdr.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
-    zmq_send_zero_copy(pub_sock_, left_data, left_size, ZMQ_DONTWAIT);
+    zmq_send(pub_sock_, hdr.c_str(), hdr.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
+
+    uint8_t* buf = new uint8_t[left_size];
+    memcpy(buf, left_data, left_size);
+
+    zmq_msg_t msg;
+    zmq_msg_init_data(&msg, buf, left_size, zc_free_fn_, nullptr);
+    zmq_msg_send(&msg, pub_sock_, ZMQ_DONTWAIT);
 }
 
 void DetectionDealer::poll_loop_() {
@@ -204,7 +210,6 @@ void DetectionDealer::poll_loop_() {
             } else if (parts.size() > 1) {
                 std::string body_str(parts[1].begin(), parts[1].end());
                 json body = json::parse(body_str);
-                // Check for service restart notification from AIVD
                 if (body.contains("Type") && body["Type"] == "Reconnect") {
                     Logger::info("DetectionDealer: AIVD reconnect notification received");
                     if (reconnect_cb_) reconnect_cb_();

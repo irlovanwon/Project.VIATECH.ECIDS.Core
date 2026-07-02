@@ -1,8 +1,8 @@
 /*
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
- * Des: API3b DataPublisher implementation
+ * Des: API3b DataPublisher — ZMQ_IMMEDIATE=1 + zero-copy
  * Date: 2026-06-18
- * Modification: 2026-06-21 Implemented
+ * Modification: 2026-07-02 Added ZMQ_IMMEDIATE=1, zmq_msg_init_data zero-copy for binary
  */
 
 #include "ecids_core/api3/DataPublisher.h"
@@ -15,6 +15,10 @@
 namespace ecids_core {
 
 using json = nlohmann::json;
+
+static void zc_free_fn_(void* data, void* /*hint*/) {
+    delete[] static_cast<uint8_t*>(data);
+}
 
 DataPublisher::DataPublisher() {
     zmq_ctx_ = zmq_ctx_new();
@@ -35,6 +39,10 @@ void DataPublisher::add_channel(const std::string& name, const std::string& endp
         return;
     }
     zmq_setsockopt(sock, ZMQ_SNDHWM, &sndhwm, sizeof(sndhwm));
+
+    int immediate = 1;
+    zmq_setsockopt(sock, ZMQ_IMMEDIATE, &immediate, sizeof(immediate));
+
     int linger = 100;
     zmq_setsockopt(sock, ZMQ_LINGER, &linger, sizeof(linger));
 
@@ -45,7 +53,7 @@ void DataPublisher::add_channel(const std::string& name, const std::string& endp
     }
 
     sockets_[name] = sock;
-    Logger::info("DataPublisher[" + name + "]: bound to " + endpoint);
+    Logger::info("DataPublisher[" + name + "]: bound to " + endpoint + " (IMMEDIATE=1)");
 }
 
 void DataPublisher::start() {
@@ -87,7 +95,13 @@ void DataPublisher::publish_binary(const std::string& channel,
     if (it == sockets_.end() || !it->second) return;
 
     zmq_send(it->second, header_json.c_str(), header_json.size(), ZMQ_SNDMORE | ZMQ_DONTWAIT);
-    zmq_send(it->second, data, size, ZMQ_DONTWAIT);
+
+    uint8_t* buf = new uint8_t[size];
+    memcpy(buf, data, size);
+
+    zmq_msg_t msg;
+    zmq_msg_init_data(&msg, buf, size, zc_free_fn_, nullptr);
+    zmq_msg_send(&msg, it->second, ZMQ_DONTWAIT);
 }
 
 } // namespace ecids_core

@@ -2,7 +2,7 @@
  * Copyright(c) 2026-2030, VIATECH & UZONE All rights reserved
  * Des: Shared type definitions for internal data transfer
  * Date: 2026-06-18
- * Modification: 2026-06-23 Removed Installation mode (now sub-task of Inspection), added Historical mode
+ * Modification: 2026-07-02 Added cleat classification, region info, 4-edge types, gap line types
  */
 
 #ifndef ECIDS_CORE_COMMON_TYPES_H
@@ -133,18 +133,73 @@ struct DetectionResponse {
     std::string ts_replied;
 };
 
+// --- Geometry primitives (moved from EdgeFitter.h to avoid circular deps) ---
+
+struct Point2D {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+struct Line2D {
+    double slope = 0.0;
+    double intercept = 0.0;
+    bool valid = false;
+};
+
+// --- Cleat classification ---
+
+enum class CleatType { Unknown = 0, Long = 1, Short = 2 };
+
+struct ClassifiedCleat {
+    Detection detection;
+    CleatType type = CleatType::Unknown;
+    Point2D bottom_mid;
+    double bottom_y = 0.0;
+    double top_y = 0.0;
+    double center_x = 0.0;
+};
+
+// --- Edge types ---
+
 struct FittedEdge {
     bool valid = false;
     double slope = 0.0;
     double intercept = 0.0;
 };
 
+struct FittedEdges {
+    FittedEdge up_long;
+    FittedEdge up_short;
+    FittedEdge dn_long;
+    FittedEdge dn_short;
+};
+
+// --- Region info ---
+
+struct RegionInfo {
+    double up_y_start = 0.0;
+    double up_y_end = 0.0;
+    double gap_y_start = 0.0;
+    double gap_y_end = 0.0;
+    double dn_y_start = 0.0;
+    double dn_y_end = 0.0;
+    bool valid = false;
+};
+
+// --- Gap line types ---
+
+enum class GapLineType { Unknown = 0, UpGap = 1, DownGap = 2 };
+
 struct GapLineInfo {
     bool valid = false;
+    GapLineType type = GapLineType::Unknown;
     double up_x = 0.0, up_y = 0.0;
     double dn_x = 0.0, dn_y = 0.0;
     double gap_distance_mm = 0.0;
+    double disparity = 0.0;
 };
+
+// --- Inspection result ---
 
 struct InspectionResult {
     std::string transaction_id;
@@ -157,10 +212,20 @@ struct InspectionResult {
     std::vector<Detection> abnormal;
     std::string timestamp;
     std::vector<std::string> image_files;
-    FittedEdge up_edge;
-    FittedEdge dn_edge;
+
+    FittedEdges edges;
+    RegionInfo region;
     std::vector<GapLineInfo> gap_lines;
+
+    // Annotated images (JPG-encoded)
+    std::vector<uint8_t> annotated_left;
+    std::vector<uint8_t> annotated_right;
+    // Raw AI-only annotated images (for AI Test set 2)
+    std::vector<uint8_t> ai_annotated_left;
+    std::vector<uint8_t> ai_annotated_right;
 };
+
+// --- Database write request (for SPSC writer) ---
 
 struct DBWriteRequest {
     enum class Type { Image, AIResult, StereoResult, PointCloud, DepthMap };
@@ -169,7 +234,7 @@ struct DBWriteRequest {
     std::string subfolder;
     std::string camera_id;
     int pair_index = 0;
-    std::vector<uint8_t> data;
+    std::shared_ptr<std::vector<uint8_t>> data;
     std::string text_data;
     std::string format = "jpg";
 };
